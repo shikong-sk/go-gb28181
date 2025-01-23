@@ -191,3 +191,18 @@ func TestGB2312XML(t *testing.T) {
 	decoder.Decode(&obj)
 	fmt.Printf("%+v\n", obj)
 }
+
+func TestXML(t *testing.T) {
+	fmt.Printf("%s\n", GB2312_XML)
+
+	obj := Catalog{}
+	err := XMLUnmarshal([]byte(GB2312_XML), &obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%+v\n", &obj)
+
+	fmt.Println(XMLMarshalString(&obj, "GB2312"))
+	fmt.Println(XMLMarshalString(&obj, "GBK"))
+	fmt.Println(XMLMarshalString(&obj, "UTF8"))
+}
