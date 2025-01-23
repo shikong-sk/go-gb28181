@@ -55,7 +55,7 @@ func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 				}
 
 				writer := transform.NewWriter(xmlBytes, t)
-				writer.Write([]byte(xmlStr))
+				_, _ = writer.Write([]byte(xmlStr))
 				_ = writer.Close()
 			}
 		}()

@@ -18,7 +18,8 @@ func TestClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 
 	ua, _ := sipgo.NewUA(
-		sipgo.WithUserAgentHostname("44050100002000000002@10.10.10.20:5099"))
+		sipgo.WithUserAgent("44050100002000000002"),
+		sipgo.WithUserAgentHostname("10.10.10.20:5099"))
 
 	srv, _ := sipgo.NewServer(ua) // Creating server handle
 
