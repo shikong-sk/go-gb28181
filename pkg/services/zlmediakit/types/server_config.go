@@ -1,6 +1,8 @@
 package types
 
-type ServerConfigResp = []ServerConfig
+type ServerConfigResp = Data[ServerConfigRespRaw]
+
+type ServerConfigRespRaw = []ServerConfig
 
 type ServerConfig struct {
 	ApiApiDebug                    string `json:"api.apiDebug"`

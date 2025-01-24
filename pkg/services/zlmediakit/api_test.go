@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit/types"
+	"github.com/duke-git/lancet/v2/convertor"
+	"github.com/duke-git/lancet/v2/netutil"
 	"github.com/go-resty/resty/v2"
 	"testing"
 )
@@ -18,13 +20,13 @@ func TestZLMediaKit_API(t *testing.T) {
 	versionResp, err := zLMediaKitService.client.R().Get("/index/api/version")
 	printRequest(versionResp, err)
 
-	version := &types.Data[types.VersionResp]{}
+	version := &types.VersionResp{}
 	_ = json.Unmarshal(versionResp.Body(), &version)
 	fmt.Printf("Version: %+v\n\n", version)
 
 	serverConfigResp, err := zLMediaKitService.client.R().Get("/index/api/getServerConfig")
 	printRequest(serverConfigResp, err)
-	serverConfig := &types.Data[types.ServerConfigResp]{}
+	serverConfig := &types.ServerConfigResp{}
 	_ = json.Unmarshal(serverConfigResp.Body(), &serverConfig)
 	fmt.Printf("ServerConfig: %+v\n\n", serverConfig)
 
@@ -65,4 +67,19 @@ func printResponseTrace(resp *resty.Response) {
 	fmt.Println("  RequestAttempt:", ti.RequestAttempt)
 	fmt.Println("  RemoteAddr    :", ti.RemoteAddr.String())
 	fmt.Println()
+}
+
+func TestConvertor(t *testing.T) {
+	m, _ := convertor.StructToMap(&types.OpenRtpServerReq{
+		Port:     5050,
+		TcpMode:  0,
+		StreamId: "123456",
+	})
+
+	t.Log(m)
+
+	resp, _ := resty.New().R().
+		SetQueryString(netutil.ConvertMapToQueryString(m)).Get("/index/api/openRtpServer")
+
+	t.Log(resp.Request.URL)
 }
