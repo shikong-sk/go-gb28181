@@ -4,7 +4,6 @@ go 1.23.5
 
 require (
 	github.com/axgle/mahonia v0.0.0-20180208002826-3358181d7394
-	github.com/duke-git/lancet/v2 v2.3.4
 	github.com/emiago/sipgo v0.28.0
 	github.com/icholy/digest v1.1.0
 	github.com/pelletier/go-toml/v2 v2.2.2

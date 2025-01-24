@@ -2,7 +2,10 @@ package test
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/icholy/digest"
@@ -128,6 +131,72 @@ func TestClient(t *testing.T) {
 
 	signal.Notify(quit, os.Interrupt)
 	<-quit
+}
+
+func TestCatalog(t *testing.T) {
+	ua, _ := sipgo.NewUA(
+		sipgo.WithUserAgent("44050100002000000002"),
+		sipgo.WithUserAgentHostname("10.10.10.20:5099"))
+
+	client, _ := sipgo.NewClient(ua,
+		sipgo.WithClientHostname("10.10.10.20"),
+		sipgo.WithClientPort(5099))
+
+	resp := new(manscdp.CatalogResp)
+	resp.XMLName = xml.Name{Local: "Response"}
+	resp.DeviceID = "44050100002000000002"
+	resp.CmdType = "Catalog"
+	resp.SumNum = "1"
+	resp.DeviceList = new(manscdp.CateLogDeviceList)
+	resp.DeviceList.XMLName = xml.Name{Local: "DeviceList"}
+	resp.DeviceList.Num = "1"
+	resp.DeviceList.Item = make([]manscdp.CateLogDevice, 1)
+	resp.DeviceList.Item[0].DeviceID = "44050100002000000002"
+	resp.DeviceList.Item[0].Name = "设备名称"
+	resp.DeviceList.Item[0].Manufacturer = "设备厂商"
+	resp.DeviceList.Item[0].ErrCode = "0"
+	resp.DeviceList.Item[0].EndTime = "2022-12-31'T'23:59:59"
+	resp.DeviceList.Item[0].Port = fmt.Sprintf("%d", 5099)
+
+	resp.SN = "90000"
+
+	marshal, _ := utils.XMLMarshal(resp, "gb2312")
+	t.Logf("回复查询指令: %s\n%+v\n", "Catalog", resp)
+
+	target := sip.Uri{
+		User:    "44050100002000000003",
+		Host:    "10.10.10.20",
+		Port:    5060,
+		Headers: sip.NewParams(),
+	}
+
+	time.Sleep(time.Second * 1)
+	//uri := sip.Uri{User: "44050100002000000002", Host: "10.10.10.20", Port: 5099}
+	nReq := sip.NewRequest(sip.MESSAGE, target)
+	nReq.SetTransport("UDP")
+	//to := sip.NewHeader("To", req.GetHeader("From").Value())
+	//from := sip.NewHeader("From", req.GetHeader("To").Value())
+	//nReq.AppendHeader(to)
+	//nReq.AppendHeader(from)
+	//nReq.AppendHeader(req.GetHeader("Call-ID"))
+	nReq.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
+
+	nReq.SetBody(marshal)
+	err := sipgo.ClientRequestBuild(client, nReq)
+	//if err != nil {
+	//	logger.Error().Err(err)
+	//}
+
+	t.Logf("向服务器发送查询指令: %s\n%+v\n", "Catalog", nReq)
+
+	client.TransactionLayer()
+	_, err = client.TransactionRequest(context.Background(), nReq)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	_ = client.Close()
+	t.Log("向服务器发送查询指令完成")
 }
 
 func getResponse(tx sip.ClientTransaction) (*sip.Response, error) {
