@@ -4,6 +4,7 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/message"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/rs/zerolog"
@@ -41,6 +42,7 @@ func main() {
 	}
 
 	log.SetLogger(&logger)
+	zlmediakit.SetupZLMediaKitService(clientConfig.ZLMediaKit)
 
 	ctx := context.Background()
 	addr := fmt.Sprintf("%s:%d", clientConfig.ListenIp, clientConfig.ListenPort)

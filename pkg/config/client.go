@@ -1,5 +1,7 @@
 package config
 
+import "git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
+
 type ClientConfig struct {
 	Debug bool `json:"debug" toml:"debug" yaml:"debug" comment:"调试模式"`
 
@@ -11,6 +13,8 @@ type ClientConfig struct {
 	DeviceId   string `json:"deviceId" toml:"deviceId" yaml:"deviceId" comment:"设备Id"`
 	ListenIp   string `json:"listenIp" toml:"listenIp" yaml:"listenIp" comment:"监听Ip"`
 	ListenPort int    `json:"listenPort" toml:"listenPort" yaml:"listenPort" comment:"监听端口号"`
+
+	ZLMediaKit *zlmediakit.Config `json:"zlmediakit" toml:"zlmediakit" yaml:"zlmediakit" comment:"ZLMediaKit配置"`
 }
 
 func DefaultClientConfig() *ClientConfig {
@@ -24,6 +28,12 @@ func DefaultClientConfig() *ClientConfig {
 
 		ListenIp:   "0.0.0.0",
 		DeviceId:   "44050100002000000002",
-		ListenPort: 8081,
+		ListenPort: 5099,
+
+		ZLMediaKit: &zlmediakit.Config{
+			Id:     "zlmediakit",
+			Url:    "http://10.10.10.200:5081",
+			Secret: "zlmediakit",
+		},
 	}
 }
