@@ -1,13 +1,13 @@
 package main
 
 import (
-	"encoding/xml"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/message"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/rs/zerolog"
+	"math"
 	"time"
 
 	"context"
@@ -18,6 +18,8 @@ import (
 )
 
 func main() {
+	// 解决 sip go udp 包 > 1500 报错
+	sip.UDPMTUSize = math.MaxInt
 	output := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
 		w.Out = os.Stdout
 		w.TimeFormat = time.RFC3339
@@ -38,87 +40,86 @@ func main() {
 		logger = logger.Level(zerolog.InfoLevel)
 	}
 
-	ctx := context.Background()
+	log.SetLogger(&logger)
 
+	ctx := context.Background()
 	addr := fmt.Sprintf("%s:%d", clientConfig.ListenIp, clientConfig.ListenPort)
 	ua, _ := sipgo.NewUA(
 		sipgo.WithUserAgent(clientConfig.DeviceId),
 		sipgo.WithUserAgentHostname(addr))
 
+	client, _ := sipgo.NewClient(ua,
+		sipgo.WithClientHostname(clientConfig.ListenIp),
+		sipgo.WithClientPort(clientConfig.ListenPort))
+
 	srv, _ := sipgo.NewServer(ua, sipgo.WithServerLogger(logger))
 
-	srv.OnMessage(func(req *sip.Request, tx sip.ServerTransaction) {
-		query := new(manscdp.CatalogReq)
-		_ = utils.XMLUnmarshal(req.Body(), query)
-		logger.Info().Msgf("收到查询指令: %s\n%+v\n", query.CmdType, query)
+	message.SetupMessageHandler(srv, client, clientConfig)
 
-		//response := sip.NewResponse(sip.StatusOK, "OK")
-		//err = tx.Respond(response)
-		//if err != nil {
-		//	logger.Error().Err(err)
-		//}
-		tx.Done()
-
-		go func() {
-			client, _ := sipgo.NewClient(ua,
-				sipgo.WithClientHostname(clientConfig.ListenIp),
-				sipgo.WithClientPort(clientConfig.ListenPort))
-
-			resp := new(manscdp.CatalogResp)
-			resp.XMLName = xml.Name{Local: "Response"}
-			resp.DeviceID = clientConfig.DeviceId
-			resp.CmdType = "Catalog"
-			resp.SumNum = "1"
-			resp.DeviceList = new(manscdp.CateLogDeviceList)
-			resp.DeviceList.XMLName = xml.Name{Local: "DeviceList"}
-			resp.DeviceList.Num = "1"
-			resp.DeviceList.Item = make([]manscdp.CateLogDevice, 1)
-			resp.DeviceList.Item[0].DeviceID = "44050100002000000002"
-			resp.DeviceList.Item[0].Name = "设备名称"
-			resp.DeviceList.Item[0].Manufacturer = "设备厂商"
-			resp.DeviceList.Item[0].ErrCode = "0"
-			resp.DeviceList.Item[0].Port = fmt.Sprintf("%d", clientConfig.ListenPort)
-
-			resp.SN = query.SN
-
-			marshal, _ := utils.XMLMarshal(resp, "gbk")
-			logger.Info().Msgf("回复查询指令: %s\n%+v\n", query.CmdType, resp)
-
-			target := sip.Uri{
-				User:    clientConfig.ServerId,
-				Host:    clientConfig.ServerIp,
-				Port:    clientConfig.ServerPort,
-				Headers: sip.NewParams(),
-			}
-
-			time.Sleep(time.Second * 1)
-			//uri := sip.Uri{User: "44050100002000000002", Host: "10.10.10.20", Port: 5099}
-			nReq := sip.NewRequest(sip.MESSAGE, target)
-			nReq.SetTransport("UDP")
-			to := sip.NewHeader("To", req.GetHeader("From").Value())
-			from := sip.NewHeader("From", req.GetHeader("To").Value())
-			nReq.AppendHeader(to)
-			nReq.AppendHeader(from)
-			//nReq.AppendHeader(req.GetHeader("Call-ID"))
-			nReq.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
-
-			nReq.SetBody(marshal)
-			err := sipgo.ClientRequestBuild(client, nReq)
-			if err != nil {
-				logger.Error().Err(err)
-			}
-
-			logger.Info().Msgf("向服务器发送查询指令: %s\n%+v\n", query.CmdType, nReq)
-
-			err = client.WriteRequest(nReq)
-			if err != nil {
-				logger.Error().Err(err)
-				return
-			}
-			_ = client.Close()
-			logger.Info().Msgf("向服务器发送查询指令完成")
-		}()
-	})
+	//srv.OnMessage(func(req *sip.Request, tx sip.ServerTransaction) {
+	//	query := new(manscdp.CatalogReq)
+	//	_ = utils.XMLUnmarshal(req.Body(), query)
+	//	logger.Info().Msgf("收到查询指令: %s\n%+v\n", query.CmdType, query)
+	//
+	//	tx.Done()
+	//
+	//	go func() {
+	//		resp := new(manscdp.CatalogResp)
+	//		resp.XMLName = xml.Name{Local: "Response"}
+	//		resp.DeviceID = clientConfig.DeviceId
+	//		resp.CmdType = "Catalog"
+	//		resp.SumNum = "1"
+	//		resp.DeviceList = new(manscdp.CateLogDeviceList)
+	//		resp.DeviceList.XMLName = xml.Name{Local: "DeviceList"}
+	//		resp.DeviceList.Num = "1"
+	//		resp.DeviceList.Item = make([]manscdp.CateLogDevice, 0)
+	//
+	//		device := manscdp.CateLogDevice{}
+	//		device.DeviceID = clientConfig.DeviceId
+	//		device.Name = "设备名称"
+	//		device.Manufacturer = "设备厂商"
+	//		device.ErrCode = "0"
+	//		device.Port = fmt.Sprintf("%d", clientConfig.ListenPort)
+	//
+	//		resp.DeviceList.Item = append(resp.DeviceList.Item, device)
+	//
+	//		resp.SN = query.SN
+	//
+	//		marshal, _ := utils.XMLMarshal(resp, "gbk")
+	//		logger.Info().Msgf("回复查询指令: %s\n%+v\n", query.CmdType, resp)
+	//
+	//		target := sip.Uri{
+	//			User:    clientConfig.ServerId,
+	//			Host:    clientConfig.ServerIp,
+	//			Port:    clientConfig.ServerPort,
+	//			Headers: sip.NewParams(),
+	//		}
+	//
+	//		//uri := sip.Uri{User: "44050100002000000002", Host: "10.10.10.20", Port: 5099}
+	//		nReq := sip.NewRequest(sip.MESSAGE, target)
+	//		nReq.SetTransport("UDP")
+	//		to := sip.NewHeader("To", req.GetHeader("From").Value())
+	//		from := sip.NewHeader("From", req.GetHeader("To").Value())
+	//		nReq.AppendHeader(to)
+	//		nReq.AppendHeader(from)
+	//		//nReq.AppendHeader(req.GetHeader("Call-ID"))
+	//		nReq.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
+	//
+	//		nReq.SetBody(marshal)
+	//		err := sipgo.ClientRequestBuild(client, nReq)
+	//		if err != nil {
+	//			logger.Error().Msgf("向服务器发送查询指令失败: %s", err)
+	//		}
+	//
+	//		logger.Debug().Msgf("向服务器发送查询指令: %s\n%+v\n", query.CmdType, nReq)
+	//
+	//		err = client.WriteRequest(nReq)
+	//		if err != nil {
+	//			logger.Error().Msgf("向服务器发送查询指令失败: %s", err)
+	//			return
+	//		}
+	//	}()
+	//})
 
 	quit := make(chan os.Signal, 1)
 	go func() {

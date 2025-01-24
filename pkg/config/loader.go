@@ -2,8 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/constants"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/logger"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/viper"
 	"os"
@@ -45,7 +45,7 @@ func ReadClientConfig() (*ClientConfig, error) {
 		var configFileNotFoundError viper.ConfigFileNotFoundError
 		if errors.As(err, &configFileNotFoundError) {
 			_ = GenerateConfig()
-			logger.Log().Fatalf("未找到配置文件, 已生成示例配置文件于运行路径下")
+			fmt.Println("未找到配置文件, 已生成示例配置文件于运行路径下")
 		}
 	}
 
