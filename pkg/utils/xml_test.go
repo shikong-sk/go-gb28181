@@ -196,7 +196,7 @@ func TestXML(t *testing.T) {
 	fmt.Printf("%s\n", GB2312_XML)
 
 	obj := Catalog{}
-	err := XMLUnmarshal([]byte(GB2312_XML), &obj)
+	err := XMLUnmarshal([]byte(GB2312_XML), obj)
 	if err != nil {
 		t.Fatal(err)
 	}
