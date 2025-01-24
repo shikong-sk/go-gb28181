@@ -32,7 +32,9 @@ type MediaTrack struct {
 	SampleRate    int    `json:"sample_rate"`
 }
 
-type GetMediaListResp struct {
+type GetMediaListResp = Data[[]GetMediaListRespRaw]
+
+type GetMediaListRespRaw struct {
 	Schema string `json:"schema"`
 	Vhost  string `json:"vhost"`
 	App    string `json:"app"`

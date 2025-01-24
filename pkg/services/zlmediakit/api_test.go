@@ -10,6 +10,25 @@ import (
 	"testing"
 )
 
+func TestZLMediaKit(t *testing.T) {
+	SetupZLMediaKitService(&Config{
+		Id:     "amrWMKmbKqoBjRQ9",
+		Url:    "http://10.10.10.200:5081",
+		Secret: "4155cca6-2f9f-11ee-85e6-8de4ce2e7333",
+	})
+
+	resp, err := zLMediaKitService.client.R().Get("/index/api/getMediaList")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := &types.GetMediaListResp{}
+	_ = json.Unmarshal(resp.Body(), &data)
+	t.Logf("%+v\n", data)
+	for _, datum := range data.Data {
+		t.Logf("%+v\n", datum)
+	}
+}
+
 func TestZLMediaKit_API(t *testing.T) {
 	SetupZLMediaKitService(&Config{
 		Id:     "amrWMKmbKqoBjRQ9",
