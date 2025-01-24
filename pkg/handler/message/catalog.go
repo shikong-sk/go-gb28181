@@ -52,14 +52,12 @@ func CatalogHandler(client *sipgo.Client, clientConfig *config.ClientConfig, req
 		Headers: sip.NewParams(),
 	}
 
-	//uri := sip.Uri{User: "44050100002000000002", Host: "10.10.10.20", Port: 5099}
 	nReq := sip.NewRequest(sip.MESSAGE, target)
 	nReq.SetTransport("UDP")
 	to := sip.NewHeader("To", req.GetHeader("From").Value())
 	from := sip.NewHeader("From", req.GetHeader("To").Value())
 	nReq.AppendHeader(to)
 	nReq.AppendHeader(from)
-	//nReq.AppendHeader(req.GetHeader("Call-ID"))
 	nReq.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
 
 	nReq.SetBody(marshal)
