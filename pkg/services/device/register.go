@@ -13,6 +13,12 @@ import (
 
 var registerSenders = make(map[string]*time.Ticker)
 
+func StopAllRegister() {
+	for _, timer := range registerSenders {
+		timer.Stop()
+	}
+}
+
 func SetupRegister(client *sipgo.Client, clientConfig *config.ClientConfig) {
 	timer := time.NewTicker(time.Second * 3600)
 	registerSenders[clientConfig.DeviceId] = timer

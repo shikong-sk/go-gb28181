@@ -81,6 +81,7 @@ func main() {
 
 	message.SetupMessageHandler(srv, client, clientConfig)
 	device.SetupRegister(client, clientConfig)
+	defer device.StopAllRegister()
 	keepalive.SetupKeepalive(client, clientConfig)
 	device.StartKeepAlive(client)
 	defer device.StopKeepAlive()
