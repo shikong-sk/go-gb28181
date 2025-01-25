@@ -12,6 +12,7 @@ import (
 	"strings"
 )
 
+// XMLMarshalString 将给定的对象v序列化为XML字符串，并指定字符集charset
 func XMLMarshalString(v interface{}, charset string) (string, error) {
 	marshal, err := XMLMarshal(v, charset)
 	if err != nil {
@@ -20,6 +21,7 @@ func XMLMarshalString(v interface{}, charset string) (string, error) {
 	return string(marshal), nil
 }
 
+// XMLMarshal 将给定的对象obj序列化为XML格式的字节数组，并指定字符集charset
 func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 	marshal := &bytes.Buffer{}
 	encoder := xml.NewEncoder(marshal)
@@ -69,6 +71,7 @@ func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 	return xmlBytes.Bytes(), nil
 }
 
+// XMLUnmarshal 将XML格式的字节数组data反序列化为对象obj
 func XMLUnmarshal(data []byte, obj interface{}) error {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	decoder.CharsetReader = func(c string, input io.Reader) (io.Reader, error) {

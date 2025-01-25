@@ -4,6 +4,11 @@ type ServerConfigResp = Data[ServerConfigRespRaw]
 
 type ServerConfigRespRaw = []ServerConfig
 
+type SetServerConfigResp struct {
+	Code    int `json:"code"`
+	Changed int `json:"changed"`
+}
+
 type ServerConfig struct {
 	ApiApiDebug                    string `json:"api.apiDebug"`
 	ApiDefaultSnap                 string `json:"api.defaultSnap"`

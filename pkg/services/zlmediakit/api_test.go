@@ -5,18 +5,22 @@ import (
 	"fmt"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit/types"
 	"github.com/duke-git/lancet/v2/convertor"
+	"github.com/duke-git/lancet/v2/formatter"
 	"github.com/duke-git/lancet/v2/netutil"
 	"github.com/go-resty/resty/v2"
+	"strings"
 	"testing"
 )
 
 func TestZLMediaKit(t *testing.T) {
+	// 设置ZLMediaKit服务，传入配置信息
 	SetupZLMediaKitService(&Config{
 		Id:     "amrWMKmbKqoBjRQ9",
 		Url:    "http://10.10.10.200:5081",
 		Secret: "4155cca6-2f9f-11ee-85e6-8de4ce2e7333",
 	})
 
+	// 获取媒体列表并检查响应
 	resp, err := zLMediaKitService.client.R().Get("/index/api/getMediaList")
 	if err != nil {
 		t.Fatal(err)
@@ -26,6 +30,67 @@ func TestZLMediaKit(t *testing.T) {
 	t.Logf("%+v\n", data)
 	for _, datum := range data.Data {
 		t.Logf("%+v\n", datum)
+	}
+
+	// 获取ZLMediaKit服务实例
+	service := GetZLMediaKitService()
+
+	// 获取API列表并打印数据
+	apiList, err := service.GetApiList()
+	printData(apiList, err, t)
+
+	// 打印分隔线
+	t.Log(strings.Repeat("=", 50))
+
+	// 获取服务器配置并打印数据
+	getConfigResp, err := service.GetServerConfig()
+	printData(getConfigResp, err, t)
+
+	// 深度克隆配置并修改SRT超时时间，然后设置服务器配置
+	config := convertor.DeepClone(getConfigResp.Data[0])
+	config.SrtTimeoutSec = "5"
+	serverConfigResp, err := service.SetServerConfig(&config)
+	printResp(serverConfigResp, err, t)
+
+	// 再次获取服务器配置并打印数据，以验证修改是否成功
+	getConfigResp, err = service.GetServerConfig()
+	printData(getConfigResp, err, t)
+
+	// 打印分隔线
+	t.Log(strings.Repeat("=", 50))
+}
+
+func printResp[T any](data *T, err error, t *testing.T) {
+	if err != nil {
+		t.Error(err)
+	} else {
+		pretty, _ := formatter.Pretty(data)
+		t.Log(pretty)
+	}
+}
+
+func printData[T any](data *types.Data[T], err error, t *testing.T) {
+	if err != nil {
+		t.Error(err)
+	} else {
+
+		switch x := interface{}(data.Data).(type) {
+		case string, int, int64, float32, float64, bool, nil, []byte:
+			t.Log(x)
+
+		case []any:
+			for _, s := range x {
+				t.Logf("\t%+v\n", s)
+			}
+		case []string:
+			for _, s := range x {
+				t.Logf("\t%+v\n", s)
+			}
+
+		default:
+			result, _ := formatter.Pretty(x)
+			t.Logf("%s\n", result)
+		}
 	}
 }
 

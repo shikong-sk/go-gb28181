@@ -2,6 +2,7 @@ package manscdp
 
 import "encoding/xml"
 
+// CatalogReq 定义了查询目录的请求结构
 type CatalogReq struct {
 	XMLName  xml.Name `xml:"Query"`
 	CmdType  string   `xml:"CmdType"`
@@ -9,6 +10,7 @@ type CatalogReq struct {
 	DeviceID string   `xml:"DeviceID"`
 }
 
+// CatalogResp 定义了查询目录的响应结构
 type CatalogResp struct {
 	XMLName    xml.Name           `xml:"Response"`
 	CmdType    string             `xml:"CmdType"`
@@ -18,12 +20,14 @@ type CatalogResp struct {
 	DeviceID   string             `xml:"DeviceID"`
 }
 
+// CateLogDeviceList 定义了设备列表的结构
 type CateLogDeviceList struct {
 	XMLName xml.Name        `xml:"DeviceList"`
 	Num     string          `xml:"Num,attr"`
 	Item    []CateLogDevice `xml:"Item"`
 }
 
+// CateLogDevice 定义了单个设备的详细信息结构
 type CateLogDevice struct {
 	XMLName      xml.Name `xml:"Item"`
 	Name         string   `xml:"Name"`

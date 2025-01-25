@@ -11,6 +11,7 @@ import (
 )
 
 func GenerateConfig() error {
+	// 生成配置文件
 	p, _ := filepath.Abs("./config.toml")
 
 	flag := os.O_RDWR
@@ -35,6 +36,7 @@ func GenerateConfig() error {
 }
 
 func ReadClientConfig() (*ClientConfig, error) {
+	// 读取客户端配置文件，如果不存在则生成示例配置
 	viper.SetConfigName(constants.ConfigFileName)
 	viper.SetConfigType(constants.ConfigType)
 	for _, path := range constants.ConfigPaths {
