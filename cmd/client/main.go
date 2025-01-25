@@ -2,8 +2,10 @@ package main
 
 import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/keepalive"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/message"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/services/device"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -59,6 +61,9 @@ func main() {
 	srv, _ := sipgo.NewServer(ua, sipgo.WithServerLogger(logger))
 
 	message.SetupMessageHandler(srv, client, clientConfig)
+	keepalive.SetupKeepalive(client, clientConfig)
+	device.StartKeepAlive(client)
+	defer device.StopKeepAlive()
 
 	quit := make(chan os.Signal, 1)
 	go func() {
