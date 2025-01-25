@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	cs "git.skcks.cn/Shikong/go-gb28181/pkg/utils/charset"
 	"github.com/axgle/mahonia"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -36,8 +37,8 @@ func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 	}
 
 	xmlStr := marshal.String()
-	cs := strings.ToUpper(charset)
-	xmlStr = fmt.Sprintf("<?xml version=\"1.0\" encoding=\"%s\" ?>\r\n%s", cs, xmlStr)
+	csStr := strings.ToUpper(charset)
+	xmlStr = fmt.Sprintf("<?xml version=\"1.0\" encoding=\"%s\" ?>\r\n%s", csStr, xmlStr)
 
 	xmlBytes := &bytes.Buffer{}
 	err = func() (err error) {
@@ -45,11 +46,11 @@ func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 			if err := recover(); err != nil {
 				var t transform.Transformer
 				switch strings.ToUpper(charset) {
-				case "GBK":
+				case cs.GBK:
 					t = simplifiedchinese.GBK.NewEncoder()
-				case "GB2312":
+				case cs.GB2312:
 					t = simplifiedchinese.HZGB2312.NewEncoder()
-				case "GB18030":
+				case cs.GB18030:
 					t = simplifiedchinese.GB18030.NewEncoder()
 				default:
 					err = fmt.Errorf("unsupported charset: %s", charset)

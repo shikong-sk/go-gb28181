@@ -1,7 +1,6 @@
 package message
 
 import (
-	"encoding/xml"
 	"fmt"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
@@ -21,26 +20,17 @@ func CatalogHandler(client *sipgo.Client, clientConfig *config.ClientConfig, req
 	log.Log().Info().Msgf("收到查询指令: %s\n%+v\n", query.CmdType, query)
 	tx.Done()
 
-	resp := new(manscdp.CatalogResp)
-	resp.XMLName = xml.Name{Local: "Response"}
-	resp.DeviceID = clientConfig.DeviceId
-	resp.CmdType = "Catalog"
-	resp.SumNum = "1"
-	resp.DeviceList = new(manscdp.CateLogDeviceList)
-	resp.DeviceList.XMLName = xml.Name{Local: "DeviceList"}
-	resp.DeviceList.Num = "1"
-	resp.DeviceList.Item = make([]manscdp.CateLogDevice, 0)
+	device := manscdp.NewCateLogDevice(func(device *manscdp.CateLogDevice) {
+		device.DeviceID = clientConfig.DeviceId
+		device.Name = "设备名称"
+		device.Manufacturer = "设备厂商"
+		device.ErrCode = "0"
+		device.Port = fmt.Sprintf("%d", clientConfig.ListenPort)
+	})
 
-	device := manscdp.CateLogDevice{}
-	device.DeviceID = clientConfig.DeviceId
-	device.Name = "设备名称"
-	device.Manufacturer = "设备厂商"
-	device.ErrCode = "0"
-	device.Port = fmt.Sprintf("%d", clientConfig.ListenPort)
+	list := manscdp.NewCateLogDeviceList([]manscdp.CateLogDevice{*device})
 
-	resp.DeviceList.Item = append(resp.DeviceList.Item, device)
-
-	resp.SN = query.SN
+	resp := manscdp.NewCatalogResp(1, list, query.SN, clientConfig.DeviceId)
 
 	marshal, _ := utils.XMLMarshal(resp, "gbk")
 	log.Log().Info().Msgf("回复查询指令: %s\n%+v\n", query.CmdType, resp)
