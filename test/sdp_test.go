@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/duke-git/lancet/v2/formatter"
 	"github.com/pion/sdp"
 	"io"
 	"regexp"
@@ -50,4 +51,7 @@ f=
 		t.Error(err)
 	}
 	t.Logf("%#v\n", session)
+
+	pretty, _ := formatter.Pretty(session)
+	t.Logf("%s\n", pretty)
 }
