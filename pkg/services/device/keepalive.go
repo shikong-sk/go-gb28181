@@ -18,6 +18,7 @@ func AddKeepaliveSender(deviceId string, sender SendKeepAlive) {
 }
 
 // StartKeepAlive 启动 keepalive 定时器
+//
 // 每 30 秒发送一次 keepalive 消息到服务器
 func StartKeepAlive(client *sipgo.Client) {
 	keepaliveTimer = time.NewTicker(time.Second * 30)

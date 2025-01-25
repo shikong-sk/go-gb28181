@@ -60,16 +60,11 @@ func main() {
 	// 服务端, 接受 SIP 指令
 	srv, _ := sipgo.NewServer(ua, sipgo.WithServerLogger(logger))
 
-	message.SetupMessageHandler(srv, client, clientConfig)
-	keepalive.SetupKeepalive(client, clientConfig)
-	device.StartKeepAlive(client)
-	defer device.StopKeepAlive()
-
 	quit := make(chan os.Signal, 1)
 	go func() {
 		defer func() {
 			if err := recover(); err != nil {
-				logger.Fatal().Any("%s", err)
+				logger.Error().Msgf("%s", err)
 				quit <- syscall.SIGKILL
 			}
 		}()
@@ -77,10 +72,18 @@ func main() {
 		// 暂时 默认 udp
 		// 启动 SIP 服务
 		if err := srv.ListenAndServe(ctx, "udp", addr); err != nil {
-			logger.Error().Err(err)
+			logger.Error().Msgf("%s", err)
 			quit <- syscall.SIGTERM
 		}
 	}()
+
+	time.Sleep(1 * time.Second)
+
+	device.Register(client, clientConfig)
+	message.SetupMessageHandler(srv, client, clientConfig)
+	keepalive.SetupKeepalive(client, clientConfig)
+	device.StartKeepAlive(client)
+	defer device.StopKeepAlive()
 
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	<-quit
