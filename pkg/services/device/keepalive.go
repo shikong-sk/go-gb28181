@@ -34,5 +34,8 @@ func StartKeepAlive(client *sipgo.Client) {
 
 // StopKeepAlive 停止 keepalive 定时器
 func StopKeepAlive() {
+	if keepaliveTimer == nil {
+		return
+	}
 	keepaliveTimer.Stop()
 }
