@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+var registerSenders = make(map[string]*time.Ticker)
+
+func SetupRegister(client *sipgo.Client, clientConfig *config.ClientConfig) {
+	timer := time.NewTicker(time.Second * 3600)
+	registerSenders[clientConfig.DeviceId] = timer
+	go func() {
+		for range timer.C {
+			Register(client, clientConfig)
+		}
+	}()
+	Register(client, clientConfig)
+}
+
 func Register(client *sipgo.Client, clientConfig *config.ClientConfig) {
 	target := sip.Uri{
 		User:    clientConfig.ServerId,
@@ -83,6 +96,8 @@ func Register(client *sipgo.Client, clientConfig *config.ClientConfig) {
 
 		if resp.StatusCode != 403 {
 			log.Log().Info().Msgf("设备:%s 注册成功", clientConfig.DeviceId)
+		} else {
+			log.Log().Error().Msgf("设备:%s 注册失败", clientConfig.DeviceId)
 		}
 
 		log.Log().Info().Msgf(resp.String())

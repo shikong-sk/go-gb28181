@@ -79,8 +79,8 @@ func main() {
 
 	time.Sleep(1 * time.Second)
 
-	device.Register(client, clientConfig)
 	message.SetupMessageHandler(srv, client, clientConfig)
+	device.SetupRegister(client, clientConfig)
 	keepalive.SetupKeepalive(client, clientConfig)
 	device.StartKeepAlive(client)
 	defer device.StopKeepAlive()
