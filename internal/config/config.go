@@ -35,8 +35,9 @@ type SIPConfig struct {
 
 	// 本地配置
 	DeviceID   string `mapstructure:"device_id"`   // 设备 ID (20位国标编码)
-	ListenIP   string `mapstructure:"listen_ip"`   // 监听 IP
+	ListenIP   string `mapstructure:"listen_ip"`   // 监听 IP (0.0.0.0 监听所有)
 	ListenPort int    `mapstructure:"listen_port"` // 监听端口
+	ExternalIP string `mapstructure:"external_ip"` // 对外 IP (SIP 消息中的 IP)
 
 	// 认证配置
 	Password string `mapstructure:"password"` // 密码
@@ -80,6 +81,7 @@ func DefaultConfig() *Config {
 			DeviceID:      "34020000001320000001",
 			ListenIP:      "0.0.0.0",
 			ListenPort:    5099,
+			ExternalIP:    "", // 空则自动检测本机 IP
 			Password:      "12345678",
 			Enabled:       true,
 			RegisterCycle: 3600,

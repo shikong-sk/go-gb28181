@@ -32,6 +32,9 @@ type App struct {
 	httpServer *http.Server
 	zlmClient  *zlmediakit.ZLMediaKit
 
+	// 仓库（用于 Start 中初始化服务）
+	deviceRepo *repository.DeviceRepository
+
 	// 状态
 	running bool
 	mu      sync.RWMutex
@@ -60,11 +63,11 @@ func (a *App) Init() error {
 
 	// 2. 初始化仓库
 	db := database.GetDB()
-	deviceRepo := repository.NewDeviceRepository(db)
+	a.deviceRepo = repository.NewDeviceRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 
 	// 3. 初始化业务服务
-	a.deviceService = service.NewDeviceService(deviceRepo, channelRepo)
+	a.deviceService = service.NewDeviceService(a.deviceRepo, channelRepo)
 
 	// 4. 初始化 ZLMediaKit 客户端
 	zlmCfg := &zlmediakit.Config{
@@ -78,17 +81,12 @@ func (a *App) Init() error {
 	// 5. 初始化 SIP 服务
 	if a.config.SIP.Enabled {
 		a.sipServer = sip.NewSIPServer(a.config, a.deviceService)
-		a.catalogService = service.NewCatalogService(nil, service.CatalogConfig{
-			ServerID:   a.config.SIP.ServerID,
-			ServerIP:   a.config.SIP.ServerIP,
-			ServerPort: a.config.SIP.ServerPort,
-		})
 	}
 
 	// 6. 初始化播放服务
 	if a.zlmClient != nil {
 		a.playService = service.NewPlayService(nil, a.zlmClient, service.PlayConfig{
-			ZLMHost: a.config.ZLMediaKit.Url, // TODO: 解析 URL 获取 host
+			ZLMHost: a.config.ZLMediaKit.Url,
 			ZLMPort: 80,
 			AppName: "rtp",
 		})
@@ -113,11 +111,13 @@ func (a *App) Start() error {
 			return fmt.Errorf("启动 SIP 服务失败: %w", err)
 		}
 		// 获取 SIP client 用于其他服务
-		a.catalogService = service.NewCatalogService(a.sipServer.GetClient(), service.CatalogConfig{
-			ServerID:   a.config.SIP.ServerID,
-			ServerIP:   a.config.SIP.ServerIP,
-			ServerPort: a.config.SIP.ServerPort,
-		})
+		a.catalogService = service.NewCatalogService(
+			a.sipServer.GetClient(),
+			a.deviceRepo,
+			a.config.SIP.DeviceID,
+			a.config.SIP.ListenIP,
+			a.config.SIP.ListenPort,
+		)
 		a.playService = service.NewPlayService(a.sipServer.GetClient(), a.zlmClient, service.PlayConfig{
 			ZLMHost: "127.0.0.1",
 			ZLMPort: 80,

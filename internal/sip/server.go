@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"time"
 
@@ -20,9 +21,10 @@ type SIPServer struct {
 	config        *config.Config
 	deviceService *service.DeviceService
 
-	ua     *sipgo.UserAgent
-	client *sipgo.Client
-	server *sipgo.Server
+	ua         *sipgo.UserAgent
+	client     *sipgo.Client
+	server     *sipgo.Server
+	externalIP string // 对外 IP (用于 SIP 消息)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -71,9 +73,14 @@ func (s *SIPServer) Start() error {
 	}
 	s.ua = ua
 
-	// 创建客户端 (发送/回复 SIP 指令)
+	// 获取对外 IP (用于 Via 头)
+	externalIP := s.getExternalIP()
+	s.externalIP = externalIP
+	log.Info().Str("external_ip", externalIP).Msg("使用对外 IP")
+
+	// 创建客户端 (发送/回复 SIP 指令) - 使用对外 IP
 	client, err := sipgo.NewClient(ua,
-		sipgo.WithClientHostname(s.config.SIP.ListenIP),
+		sipgo.WithClientHostname(externalIP),
 		sipgo.WithClientPort(s.config.SIP.ListenPort),
 	)
 	if err != nil {
@@ -218,7 +225,7 @@ func (s *SIPServer) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 
 	// 响应 200 OK
 	resp := sip.NewResponseFromRequest(req, 200, "OK", nil)
-	resp.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d>", deviceID, s.config.SIP.ListenIP, s.config.SIP.ListenPort)))
+	resp.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d>", deviceID, s.externalIP, s.config.SIP.ListenPort)))
 	resp.AppendHeader(sip.NewHeader("Expires", "3600"))
 	if err := tx.Respond(resp); err != nil {
 		log.Error().Err(err).Msg("响应 REGISTER 失败")
@@ -233,4 +240,24 @@ func (s *SIPServer) GetClient() *sipgo.Client {
 // GetServer 获取 SIP 服务端
 func (s *SIPServer) GetServer() *sipgo.Server {
 	return s.server
+}
+
+// getExternalIP 获取对外 IP
+// 优先使用配置的 ExternalIP，否则自动检测本机 IP
+func (s *SIPServer) getExternalIP() string {
+	// 如果配置了 ExternalIP，直接使用
+	if s.config.SIP.ExternalIP != "" {
+		return s.config.SIP.ExternalIP
+	}
+
+	// 自动检测本机 IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Warn().Err(err).Msg("无法检测本机 IP，使用 ListenIP")
+		return s.config.SIP.ListenIP
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
 }
