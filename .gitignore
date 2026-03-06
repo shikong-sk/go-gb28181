@@ -514,3 +514,8 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
+AGENTS.md
+.sisyphus
+/data
+/config.toml
+frontend/dist

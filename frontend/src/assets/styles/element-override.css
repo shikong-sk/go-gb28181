@@ -1,0 +1,8 @@
+/* Element Plus 样式覆盖 */
+.el-card {
+  --el-card-padding: 16px;
+}
+
+.el-table {
+  --el-table-header-bg-color: #f5f7fa;
+}
