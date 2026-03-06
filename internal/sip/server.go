@@ -6,11 +6,15 @@ import (
 	"math"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/internal/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/model"
 	"git.skcks.cn/Shikong/go-gb28181/internal/service"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/rs/zerolog"
@@ -150,11 +154,133 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 	body := req.Body()
 	log.Debug().Str("body", string(body)).Msg("收到 SIP MESSAGE")
 
+	// 解析 XML 消息头（通用解析，支持 Query/Response/Notify）
+	header := new(manscdp.MessageHeader)
+	if err := utils.XMLUnmarshal(body, header); err != nil {
+		log.Error().Err(err).Msg("解析 MANSCDP 消息头失败")
+		resp := sip.NewResponseFromRequest(req, 400, "Bad Request", nil)
+		tx.Respond(resp)
+		return
+	}
+
+	log.Info().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("收到 MANSCDP 消息")
+
+	// 根据消息类型处理
+	switch header.CmdType {
+	case "Catalog":
+		s.handleCatalogMessage(req, body)
+	case "Keepalive":
+		s.handleKeepaliveMessage(req, body)
+	case "Alarm":
+		s.handleAlarmMessage(req, body)
+	default:
+		log.Warn().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("未处理的 MANSCDP 消息类型")
+	}
+
 	// 响应 200 OK
 	resp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	if err := tx.Respond(resp); err != nil {
 		log.Error().Err(err).Msg("响应 MESSAGE 失败")
 	}
+}
+
+// handleCatalogMessage 处理 Catalog 消息
+func (s *SIPServer) handleCatalogMessage(req *sip.Request, body []byte) {
+	// 尝试解析为 Response
+	resp := new(manscdp.CatalogResp)
+	if err := utils.XMLUnmarshal(body, resp); err == nil && resp.SumNum != "" {
+		// 这是 Catalog 响应
+		log.Info().Str("device_id", resp.DeviceID).Str("sum_num", resp.SumNum).Msg("收到目录响应")
+		s.processCatalogResponse(resp)
+		return
+	}
+
+	// 尝试解析为 Query
+	query := new(manscdp.CatalogReq)
+	if err := utils.XMLUnmarshal(body, query); err == nil {
+		log.Info().Str("device_id", query.DeviceID).Msg("收到目录查询请求")
+		// TODO: 实现目录查询响应（作为设备端）
+	}
+}
+
+// processCatalogResponse 处理目录响应
+func (s *SIPServer) processCatalogResponse(resp *manscdp.CatalogResp) {
+	if s.deviceService == nil {
+		log.Warn().Msg("设备服务未初始化，无法保存目录")
+		return
+	}
+
+	// 解析设备列表
+	if resp.DeviceList == nil || len(resp.DeviceList.Item) == 0 {
+		log.Info().Str("device_id", resp.DeviceID).Msg("目录响应无设备列表")
+		return
+	}
+
+	log.Info().Str("device_id", resp.DeviceID).Int("count", len(resp.DeviceList.Item)).Msg("处理目录响应")
+
+	// 转换为 Channel 模型列表
+	channels := make([]model.Channel, 0, len(resp.DeviceList.Item))
+	for _, item := range resp.DeviceList.Item {
+		port, _ := strconv.Atoi(item.Port)
+		channel := model.Channel{
+			ChannelID:    item.DeviceID,
+			DeviceID:     resp.DeviceID,
+			Name:         item.Name,
+			Manufacturer: item.Manufacturer,
+			Model:        item.Model,
+			Owner:        item.Owner,
+			CivilCode:    item.CivilCode,
+			Address:      item.Address,
+			Status:       item.Status,
+			IP:           item.IPAddress,
+			Port:         port,
+		}
+		channels = append(channels, channel)
+	}
+
+	// 调用服务层保存
+	if err := s.deviceService.OnCatalogReceived(resp.DeviceID, channels); err != nil {
+		log.Error().Err(err).Str("device_id", resp.DeviceID).Msg("保存目录失败")
+	} else {
+		log.Info().Str("device_id", resp.DeviceID).Int("count", len(channels)).Msg("目录保存成功")
+	}
+}
+
+// handleKeepaliveMessage 处理 Keepalive 消息
+func (s *SIPServer) handleKeepaliveMessage(req *sip.Request, body []byte) {
+	keepalive := new(manscdp.KeepAliveReq)
+	if err := utils.XMLUnmarshal(body, keepalive); err != nil {
+		log.Error().Err(err).Msg("解析 Keepalive 消息失败")
+		return
+	}
+
+	log.Debug().Str("device_id", keepalive.DeviceID).Msg("收到心跳消息")
+
+	// 更新设备心跳时间
+	if s.deviceService != nil {
+		if err := s.deviceService.OnDeviceKeepalive(keepalive.DeviceID); err != nil {
+			log.Error().Err(err).Str("device_id", keepalive.DeviceID).Msg("更新心跳时间失败")
+		}
+	}
+}
+
+// handleAlarmMessage 处理 Alarm 消息
+func (s *SIPServer) handleAlarmMessage(req *sip.Request, body []byte) {
+	alarm := new(manscdp.AlarmNotify)
+	if err := utils.XMLUnmarshal(body, alarm); err != nil {
+		log.Error().Err(err).Msg("解析 Alarm 消息失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", alarm.DeviceID).
+		Str("alarm_priority", alarm.AlarmPriority).
+		Str("alarm_method", alarm.AlarmMethod).
+		Str("alarm_time", alarm.AlarmTime).
+		Str("alarm_description", alarm.AlarmDescription).
+		Msg("收到报警通知")
+
+	// TODO: 保存报警信息到数据库
 }
 
 // handleRegister 处理 SIP REGISTER
