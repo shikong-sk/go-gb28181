@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/app"
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
+	"github.com/rs/zerolog"
 )
 
 var (
@@ -34,7 +36,8 @@ func main() {
 	logger := log.InitLogger(cfg.Debug)
 	log.SetLogger(&logger)
 
-	log.Info().Msg("GB28181 服务启动中...")
+	// 设置 zerolog 全局时间格式
+	zerolog.TimeFieldFormat = time.RFC3339
 
 	// 创建应用
 	application := app.NewApp(cfg)

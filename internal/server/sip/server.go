@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"strconv"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/rs/zerolog"
 )
 
 // SIPServer SIP 服务管理器
@@ -47,23 +45,17 @@ func (s *SIPServer) Start() error {
 	// 解决 UDP 包大于 MTU 报错
 	sip.UDPMTUSize = math.MaxInt
 
-	// 初始化日志
-	output := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
-		w.Out = os.Stdout
-		w.TimeFormat = time.RFC3339
-	})
-	logger := zerolog.New(output).With().Timestamp().Logger()
+	// 获取全局 logger (已在 pkg/log 中配置 ConsoleWriter)
+	logger := *log.GetLogger()
 
 	if s.config.Debug {
 		sip.SIPDebug = s.config.Debug
-		logger = logger.Level(zerolog.DebugLevel)
-	} else {
-		logger = logger.Level(zerolog.InfoLevel)
+		// 设置自定义 SIP 日志跟踪器，使用 ConsoleWriter 格式输出
+		sip.SIPDebugTracer(log.NewSIPTracer())
 	}
 
-	log.SetLogger(&logger)
-
 	// 创建上下文
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
 	// 创建 UserAgent
@@ -93,6 +85,7 @@ func (s *SIPServer) Start() error {
 	s.client = client
 
 	// 创建服务端 (接收 SIP 指令)
+	// 传入 logger 以输出可视化格式的日志
 	server, err := sipgo.NewServer(ua, sipgo.WithServerLogger(logger))
 	if err != nil {
 		return fmt.Errorf("创建 SIP 服务端失败: %w", err)

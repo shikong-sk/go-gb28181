@@ -316,6 +316,12 @@ func (h *CatalogHandler) HandleCatalogQuery(req *sip.Request, tx sip.ServerTrans
 
 // SyncCatalog 同步设备目录
 func (h *CatalogHandler) SyncCatalog(deviceID string) error {
+	// 从数据库获取设备信息
+	device, err := h.deviceService.GetDevice(deviceID)
+	if err != nil {
+		return fmt.Errorf("设备不存在: %w", err)
+	}
+
 	// 构建目录查询请求
 	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
 	catalogReq := manscdp.NewCatalogReq(cmdtype.Catalog, sn, deviceID)
@@ -325,11 +331,11 @@ func (h *CatalogHandler) SyncCatalog(deviceID string) error {
 		return fmt.Errorf("序列化目录查询请求失败: %w", err)
 	}
 
-	// 发送 MESSAGE
+	// 发送 MESSAGE - 目标为设备地址
 	target := sip.Uri{
 		User: deviceID,
-		Host: h.config.SIP.ServerIP,
-		Port: h.config.SIP.ServerPort,
+		Host: device.IP,
+		Port: device.Port,
 	}
 
 	req := sip.NewRequest(sip.MESSAGE, target)
@@ -345,7 +351,7 @@ func (h *CatalogHandler) SyncCatalog(deviceID string) error {
 		return fmt.Errorf("发送目录查询请求失败: %w", err)
 	}
 
-	log.Info().Str("device_id", deviceID).Msg("目录同步请求发送成功")
+	log.Info().Str("device_id", deviceID).Str("ip", device.IP).Int("port", device.Port).Msg("目录同步请求发送成功")
 	return nil
 }
 

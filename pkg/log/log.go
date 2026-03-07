@@ -74,3 +74,21 @@ func Error() *zerolog.Event {
 func Fatal() *zerolog.Event {
 	return Logger.Fatal()
 }
+
+// SIPTracer 实现 sip.SIPTracer 接口，用于输出可视化格式的 SIP 日志
+type SIPTracer struct{}
+
+// SIPTraceRead 记录 SIP 消息读取
+func (t *SIPTracer) SIPTraceRead(transport, laddr, raddr string, sipmsg []byte) {
+	Debug().Msgf("%s read from %s <- %s:\n%s", transport, laddr, raddr, string(sipmsg))
+}
+
+// SIPTraceWrite 记录 SIP 消息写入
+func (t *SIPTracer) SIPTraceWrite(transport, laddr, raddr string, sipmsg []byte) {
+	Debug().Msgf("%s write to %s -> %s:\n%s", transport, laddr, raddr, string(sipmsg))
+}
+
+// NewSIPTracer 创建 SIP 日志跟踪器
+func NewSIPTracer() *SIPTracer {
+	return &SIPTracer{}
+}

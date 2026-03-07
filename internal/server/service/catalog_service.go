@@ -9,6 +9,7 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp/cmdtype"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -48,7 +49,7 @@ func (s *CatalogService) SyncCatalog(deviceID string) error {
 
 	// 构建目录查询请求
 	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
-	catalogReq := manscdp.NewCatalogReq("Catalog", sn, deviceID)
+	catalogReq := manscdp.NewCatalogReq(cmdtype.Catalog, sn, deviceID)
 
 	// 编码为 XML (GBK)
 	body, err := utils.XMLMarshal(catalogReq, "gbk")
@@ -66,8 +67,8 @@ func (s *CatalogService) SyncCatalog(deviceID string) error {
 	// 创建 MESSAGE 请求
 	req := sip.NewRequest(sip.MESSAGE, target)
 
-	// 设置 From/To 头
-	from := sip.NewHeader("From", fmt.Sprintf("<sip:%s@%s:%d>", s.localID, s.localIP, s.localPort))
+	// 设置 From/To 头 (From 必须包含 tag 参数，符合 RFC 3261)
+	from := sip.NewHeader("From", fmt.Sprintf("<sip:%s@%s:%d>;tag=%s", s.localID, s.localIP, s.localPort, utils.GenerateFromTag()))
 	to := sip.NewHeader("To", fmt.Sprintf("<sip:%s@%s:%d>", deviceID, device.IP, device.Port))
 	callID := sip.NewHeader("Call-ID", fmt.Sprintf("%d@%s", time.Now().UnixNano(), s.localIP))
 	cseq := sip.NewHeader("CSeq", "1 MESSAGE")
