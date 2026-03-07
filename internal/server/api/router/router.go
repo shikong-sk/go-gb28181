@@ -10,11 +10,11 @@ import (
 
 // SetupRouter 设置路由
 func SetupRouter() *gin.Engine {
-	return SetupRouterWithServices(nil, nil)
+	return SetupRouterWithServices(nil, nil, nil)
 }
 
 // SetupRouterWithServices 设置路由（带完整服务）
-func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService) *gin.Engine {
+func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService, alarmService *service.AlarmService) *gin.Engine {
 	router := gin.Default()
 
 	// 健康检查
@@ -31,6 +31,7 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 	deviceHandler := http.NewDeviceHandler(deviceRepo, catalogService)
 	channelHandler := http.NewChannelHandler(channelRepo)
 	playHandler := http.NewPlayHandler(playService)
+	alarmHandler := http.NewAlarmHandler(alarmService)
 
 	// API 路由组
 	api := router.Group("/api")
@@ -62,6 +63,15 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 			play.GET("/sessions", playHandler.ListSessions)
 			play.GET("/media/:stream_id", playHandler.GetMediaInfo)
 		}
+
+		// 报警管理
+		alarms := api.Group("/alarms")
+		{
+			alarms.GET("", alarmHandler.List)
+			alarms.GET("/config", alarmHandler.GetConfig)
+			alarms.GET("/:id", alarmHandler.GetAlarm)
+			alarms.DELETE("/:id", alarmHandler.DeleteAlarm)
+		}
 	}
 
 	return router
@@ -70,5 +80,5 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 // SetupRouterWithCatalog 设置路由（带目录同步服务）
 // 已废弃，请使用 SetupRouterWithServices
 func SetupRouterWithCatalog(catalogService *service.CatalogService) *gin.Engine {
-	return SetupRouterWithServices(catalogService, nil)
+	return SetupRouterWithServices(catalogService, nil, nil)
 }

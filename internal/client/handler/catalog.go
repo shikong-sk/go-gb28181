@@ -22,8 +22,10 @@ func CatalogHandler(client *sipgo.Client, clientConfig *config.ClientConfig, req
 
 	device := manscdp.NewCateLogDevice(func(device *manscdp.CateLogDevice) {
 		device.DeviceID = clientConfig.DeviceId
-		device.Name = "设备名称"
-		device.Manufacturer = "设备厂商"
+		device.Name = clientConfig.Name
+		device.Manufacturer = clientConfig.Manufacturer
+		device.Model = clientConfig.Model
+		device.IPAddress = clientConfig.IPAddress
 		device.ErrCode = "0"
 		device.Port = fmt.Sprintf("%d", clientConfig.ListenPort)
 	})

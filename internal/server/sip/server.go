@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
@@ -16,12 +17,14 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"github.com/icholy/digest"
 )
 
 // SIPServer SIP 服务管理器
 type SIPServer struct {
 	config        *config.Config
 	deviceService *service.DeviceService
+	alarmService  *service.AlarmService
 
 	ua         *sipgo.UserAgent
 	client     *sipgo.Client
@@ -33,10 +36,11 @@ type SIPServer struct {
 }
 
 // NewSIPServer 创建 SIP 服务器
-func NewSIPServer(cfg *config.Config, deviceService *service.DeviceService) *SIPServer {
+func NewSIPServer(cfg *config.Config, deviceService *service.DeviceService, alarmService *service.AlarmService) *SIPServer {
 	return &SIPServer{
 		config:        cfg,
 		deviceService: deviceService,
+		alarmService:  alarmService,
 	}
 }
 
@@ -277,7 +281,20 @@ func (s *SIPServer) handleAlarmMessage(req *sip.Request, body []byte) {
 		Str("alarm_description", alarm.AlarmDescription).
 		Msg("收到报警通知")
 
-	// TODO: 保存报警信息到数据库
+	// 保存报警信息到数据库
+	if s.alarmService != nil {
+		alarmRecord := &model.Alarm{
+			DeviceID:         alarm.DeviceID,
+			AlarmPriority:    alarm.AlarmPriority,
+			AlarmMethod:      alarm.AlarmMethod,
+			AlarmTime:        alarm.AlarmTime,
+			AlarmDescription: alarm.AlarmDescription,
+			AlarmInfo:        alarm.AlarmInfo,
+		}
+		if err := s.alarmService.SaveAlarm(alarmRecord); err != nil {
+			log.Error().Err(err).Str("device_id", alarm.DeviceID).Msg("保存报警失败")
+		}
+	}
 }
 
 // handleRegister 处理 SIP REGISTER
@@ -334,8 +351,51 @@ func (s *SIPServer) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// TODO: 验证 Digest 认证
-	// 简化处理：直接接受注册
+	// 验证 Digest 认证
+	chal, err := digest.ParseChallenge(authorization.Value())
+	if err != nil {
+		log.Warn().Err(err).Str("device_id", deviceID).Msg("解析 Authorization 失败")
+		resp := sip.NewResponseFromRequest(req, 400, "Bad Request", nil)
+		tx.Respond(resp)
+		return
+	}
+
+	// 获取设备密码
+	password := s.config.SIP.Password // 默认使用平台密码
+	if s.deviceService != nil {
+		device, err := s.deviceService.GetDevice(deviceID)
+		if err == nil && device.Password != "" {
+			password = device.Password // 使用设备独立密码
+		}
+	}
+
+	// 从 Authorization 头提取 URI (客户端使用的 URI)
+	authResp := authorization.Value()
+	authURI := extractDigestURI(authResp)
+
+	// 计算期望的 Digest 响应
+	cred, err := digest.Digest(chal, digest.Options{
+		Method:   "REGISTER",
+		Username: deviceID,
+		URI:      authURI,
+		Password: password,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("device_id", deviceID).Msg("计算 Digest 失败")
+		resp := sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil)
+		tx.Respond(resp)
+		return
+	}
+
+	// 验证响应值
+	if !strings.Contains(authResp, "response=\""+cred.Response+"\"") {
+		log.Warn().Str("device_id", deviceID).Msg("Digest 认证失败: 密码错误")
+		resp := sip.NewResponseFromRequest(req, 403, "Forbidden", nil)
+		tx.Respond(resp)
+		return
+	}
+
+	log.Info().Str("device_id", deviceID).Msg("Digest 认证成功")
 
 	// 保存设备信息到数据库
 	if s.deviceService != nil {
@@ -353,6 +413,22 @@ func (s *SIPServer) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	if err := tx.Respond(resp); err != nil {
 		log.Error().Err(err).Msg("响应 REGISTER 失败")
 	}
+}
+
+// extractDigestURI 从 Authorization 头提取 URI 值
+func extractDigestURI(authHeader string) string {
+	// 格式: Digest username="xxx", uri="sip:xxx", ...
+	parts := strings.Split(authHeader, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "uri=") {
+			// 提取 uri="xxx" 中的 xxx
+			uri := strings.TrimPrefix(part, "uri=")
+			uri = strings.Trim(uri, "\"")
+			return uri
+		}
+	}
+	return ""
 }
 
 // GetClient 获取 SIP 客户端

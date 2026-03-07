@@ -26,6 +26,7 @@ type App struct {
 	deviceService  *service.DeviceService
 	catalogService *service.CatalogService
 	playService    *service.PlayService
+	alarmService   *service.AlarmService
 
 	// 服务器
 	sipServer  *sip.SIPServer
@@ -69,6 +70,10 @@ func (a *App) Init() error {
 	// 3. 初始化业务服务
 	a.deviceService = service.NewDeviceService(a.deviceRepo, channelRepo)
 
+	// 初始化报警服务
+	alarmRepo := repository.NewAlarmRepository(db)
+	a.alarmService = service.NewAlarmService(alarmRepo, &a.config.Alarm)
+
 	// 4. 初始化 ZLMediaKit 客户端
 	zlmCfg := &zlmediakit.Config{
 		Url:    a.config.ZLMediaKit.Url,
@@ -80,7 +85,7 @@ func (a *App) Init() error {
 
 	// 5. 初始化 SIP 服务
 	if a.config.SIP.Enabled {
-		a.sipServer = sip.NewSIPServer(a.config, a.deviceService)
+		a.sipServer = sip.NewSIPServer(a.config, a.deviceService, a.alarmService)
 	}
 
 	// 6. 初始化播放服务
@@ -134,6 +139,10 @@ func (a *App) Start() error {
 
 	a.running = true
 	log.Info().Msg("应用启动成功")
+
+	// 启动报警清理定时任务
+	go a.startAlarmCleanup()
+
 	return nil
 }
 
@@ -147,7 +156,7 @@ func (a *App) startHTTP() error {
 	}
 
 	// 创建路由
-	r := router.SetupRouterWithServices(a.catalogService, a.playService)
+	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService)
 
 	// HTTP 服务地址
 	addr := fmt.Sprintf("%s:%d", a.config.HTTP.Host, a.config.HTTP.Port)
@@ -208,6 +217,25 @@ func (a *App) Stop() {
 	log.Info().Msg("应用已停止")
 }
 
+// startAlarmCleanup 启动报警清理定时任务 (每天凌晨执行)
+func (a *App) startAlarmCleanup() {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			if a.alarmService != nil {
+				if err := a.alarmService.CleanupExpired(); err != nil {
+					log.Error().Err(err).Msg("清理过期报警失败")
+				}
+			}
+		}
+	}
+}
+
 // GetDeviceService 获取设备服务
 func (a *App) GetDeviceService() *service.DeviceService {
 	return a.deviceService
@@ -221,6 +249,11 @@ func (a *App) GetCatalogService() *service.CatalogService {
 // GetPlayService 获取播放服务
 func (a *App) GetPlayService() *service.PlayService {
 	return a.playService
+}
+
+// GetAlarmService 获取报警服务
+func (a *App) GetAlarmService() *service.AlarmService {
+	return a.alarmService
 }
 
 // GetSIPServer 获取 SIP 服务

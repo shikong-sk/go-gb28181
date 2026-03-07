@@ -24,6 +24,9 @@ type Config struct {
 
 	// ZLMediaKit 配置
 	ZLMediaKit *zlmediakit.Config `mapstructure:"zlmediakit"`
+
+	// 报警配置
+	Alarm AlarmConfig `mapstructure:"alarm"`
 }
 
 // SIPConfig SIP 相关配置
@@ -70,6 +73,12 @@ type DatabaseConfig struct {
 	MaxIdleConns int `mapstructure:"max_idle_conns"` // 最大空闲连接数
 }
 
+// AlarmConfig 报警配置
+type AlarmConfig struct {
+	Enabled       bool `mapstructure:"enabled"`        // 是否保存报警记录
+	RetentionDays int  `mapstructure:"retention_days"` // 保留天数 (0=永久保留)
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -100,6 +109,10 @@ func DefaultConfig() *Config {
 		},
 		ZLMediaKit: &zlmediakit.Config{
 			Url: "http://127.0.0.1:80",
+		},
+		Alarm: AlarmConfig{
+			Enabled:       true,
+			RetentionDays: 3,
 		},
 	}
 }

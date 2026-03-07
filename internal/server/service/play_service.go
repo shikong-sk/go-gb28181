@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,6 +39,12 @@ type PlaySession struct {
 	StartTime time.Time // 开始时间
 	Status    string    // 状态: pending, playing, stopped
 	SSRC      string    // SSRC
+	// Dialog headers for ACK/BYE
+	Via    string // Via header value
+	CallID string // Call-ID
+	From   string // From header
+	To     string // To header (from 200 OK response)
+	CSeq   int    // CSeq number
 }
 
 // PlayResult 播放结果
@@ -222,12 +229,12 @@ func (s *PlayService) buildPlayResult(session *PlaySession) *PlayResult {
 	}
 }
 
-// sendInvite 发送 INVITE
+// sendInvite 发送 INVITE 并等待响应
 func (s *PlayService) sendInvite(deviceId, channelId, streamId, sdpContent string) error {
 	// 构建目标 URI
 	target := sip.Uri{
-		User: deviceId,
-		Host: s.config.ZLMHost, // 实际应为设备 IP
+		User: channelId,
+		Host: s.config.ZLMHost, // 应从设备表获取真实 IP
 	}
 
 	// 创建 INVITE 请求
@@ -237,17 +244,109 @@ func (s *PlayService) sendInvite(deviceId, channelId, streamId, sdpContent strin
 	req.AppendHeader(sip.NewHeader("Subject", fmt.Sprintf("%s:%s,%s:0", channelId, streamId, deviceId)))
 	req.SetBody([]byte(sdpContent))
 
-	// 构建请求头
-	if err := sipgo.ClientRequestBuild(s.client, req); err != nil {
-		return fmt.Errorf("构建 INVITE 请求失败: %w", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	// 发送请求
-	if err := s.client.WriteRequest(req); err != nil {
+	// 使用 TransactionRequest 等待响应
+	tx, err := s.client.TransactionRequest(ctx, req)
+	if err != nil {
 		return fmt.Errorf("发送 INVITE 请求失败: %w", err)
 	}
+	defer tx.Terminate()
 
-	log.Debug().Str("device_id", deviceId).Str("channel_id", channelId).Msg("INVITE 请求已发送")
+	// 等待响应
+	resp, err := s.getResponse(tx)
+	if err != nil {
+		return fmt.Errorf("等待 INVITE 响应失败: %w", err)
+	}
+
+	// 处理响应
+	if resp.StatusCode == 200 {
+		s.mu.Lock()
+		session, exists := s.sessions[streamId]
+		if exists {
+			// 保存 dialog 信息
+			session.Status = PlayStatusPlaying
+			if via := resp.Via(); via != nil {
+				session.Via = via.String()
+			}
+			if callID := resp.CallID(); callID != nil {
+				session.CallID = callID.String()
+			}
+			if from := resp.From(); from != nil {
+				session.From = from.String()
+			}
+			if to := resp.To(); to != nil {
+				session.To = to.String()
+			}
+			// 从响应 SDP 解析 SSRC
+			if body := resp.Body(); len(body) > 0 {
+				session.SSRC = parseSSRCFromSDP(string(body))
+			}
+			// 保存 CSeq
+			if cseq := req.CSeq(); cseq != nil {
+				session.CSeq = int(cseq.SeqNo)
+			}
+		}
+		s.mu.Unlock()
+
+		// 发送 ACK
+		if err := s.sendAck(session, req, resp); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 ACK 失败")
+		}
+
+		log.Info().Str("stream_id", streamId).Msg("播放已建立")
+		return nil
+	}
+
+	return fmt.Errorf("INVITE 失败: %d", resp.StatusCode)
+}
+
+// getResponse 从事务获取响应
+func (s *PlayService) getResponse(tx sip.ClientTransaction) (*sip.Response, error) {
+	select {
+	case <-tx.Done():
+		return nil, fmt.Errorf("transaction timeout")
+	case res := <-tx.Responses():
+		return res, nil
+	}
+}
+
+// sendAck 发送 ACK
+func (s *PlayService) sendAck(session *PlaySession, inviteReq *sip.Request, resp *sip.Response) error {
+	// 构建 ACK 请求
+	target := sip.Uri{
+		User: session.ChannelId,
+		Host: s.config.ZLMHost,
+	}
+	ack := sip.NewRequest(sip.ACK, target)
+	ack.SetTransport("UDP")
+
+	// 复制 Via, Call-ID, From
+	if via := inviteReq.Via(); via != nil {
+		ack.AppendHeader(sip.NewHeader("Via", via.String()))
+	}
+	if callID := inviteReq.CallID(); callID != nil {
+		ack.AppendHeader(sip.NewHeader("Call-ID", callID.String()))
+	}
+	if from := inviteReq.From(); from != nil {
+		ack.AppendHeader(sip.NewHeader("From", from.String()))
+	}
+	// To 来自 200 OK 响应
+	if to := resp.To(); to != nil {
+		ack.AppendHeader(sip.NewHeader("To", to.String()))
+	}
+	// CSeq + ACK
+	if cseq := inviteReq.CSeq(); cseq != nil {
+		ack.AppendHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d ACK", cseq.SeqNo)))
+	}
+
+	// 发送 ACK (无需事务)
+	if err := s.client.WriteRequest(ack); err != nil {
+		return fmt.Errorf("发送 ACK 失败: %w", err)
+	}
+
+	log.Debug().Str("stream_id", session.StreamId).Msg("ACK 已发送")
 	return nil
 }
 
@@ -288,7 +387,7 @@ func parseSSRCFromSDP(sdp string) string {
 	return ""
 }
 
-// OnInviteResponse 处理 INVITE 响应
+// OnInviteResponse 处理 INVITE 响应 (用于异步响应处理，现已改为同步)
 func (s *PlayService) OnInviteResponse(streamId string, resp *sip.Response) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,19 +397,9 @@ func (s *PlayService) OnInviteResponse(streamId string, resp *sip.Response) {
 		return
 	}
 
-	if int(resp.StatusCode) == 200 {
-		// 成功, 更新状态
-		session.Status = PlayStatusPlaying
-
-		// 从响应 SDP 中解析 SSRC
-		if body := resp.Body(); len(body) > 0 {
-			session.SSRC = parseSSRCFromSDP(string(body))
-		}
-
-		// 发送 ACK
-		// TODO: 实现 ACK 发送
-
-		log.Info().Str("stream_id", streamId).Msg("播放已建立")
+	if resp.StatusCode == 200 {
+		// 成功, 更新状态 (已由 sendInvite 处理)
+		log.Debug().Str("stream_id", streamId).Msg("收到 INVITE 200 OK")
 	} else {
 		// 失败, 清理会话
 		session.Status = PlayStatusStopped
