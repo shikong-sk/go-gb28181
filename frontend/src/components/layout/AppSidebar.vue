@@ -23,10 +23,18 @@
         <el-icon><List /></el-icon>
         <span>通道管理</span>
       </el-menu-item>
+      <el-menu-item index="/play">
+        <el-icon><VideoPlay /></el-icon>
+        <span>视频播放</span>
+      </el-menu-item>
+      <el-menu-item index="/alarms">
+        <el-icon><Bell /></el-icon>
+        <span>报警记录</span>
+      </el-menu-item>
     </el-menu>
   </div>
 </template>
 
 <script setup lang="ts">
-import { HomeFilled, VideoCamera, List } from '@element-plus/icons-vue'
+import { HomeFilled, VideoCamera, List, VideoPlay, Bell } from '@element-plus/icons-vue'
 </script>

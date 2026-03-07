@@ -31,7 +31,13 @@ const routes: RouteRecordRaw[] = [
     name: 'Play',
     component: () => import('@/views/play/index.vue'),
     meta: { title: '视频播放' },
-},
+  },
+  {
+    path: '/alarms',
+    name: 'Alarms',
+    component: () => import('@/views/alarms/index.vue'),
+    meta: { title: '报警记录' },
+  },
 ]
 
 const router = createRouter({

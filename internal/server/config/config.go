@@ -186,6 +186,9 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("database.max_idle_conns", c.Database.MaxIdleConns)
 
 	v.SetDefault("zlmediakit.url", c.ZLMediaKit.Url)
+
+	v.SetDefault("alarm.enabled", c.Alarm.Enabled)
+	v.SetDefault("alarm.retention_days", c.Alarm.RetentionDays)
 }
 
 // generateDefaultConfig 生成默认配置文件
@@ -238,6 +241,11 @@ max_idle_conns = 5                    # 最大空闲连接数
 url = "http://127.0.0.1:80"
 secret = ""
 id = ""
+
+[alarm]
+# 报警记录配置
+enabled = true              # 是否保存报警记录
+retention_days = 3          # 保留天数 (0=永久保留)
 `
 
 	// 确保目录存在
