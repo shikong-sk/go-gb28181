@@ -1,10 +1,10 @@
 package router
 
 import (
-	"git.skcks.cn/Shikong/go-gb28181/internal/api/http"
-	"git.skcks.cn/Shikong/go-gb28181/internal/database"
-	"git.skcks.cn/Shikong/go-gb28181/internal/repository"
-	"git.skcks.cn/Shikong/go-gb28181/internal/service"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/api/http"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/database"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"github.com/gin-gonic/gin"
 )
 

@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/app"
-	"git.skcks.cn/Shikong/go-gb28181/internal/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/app"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 )
 

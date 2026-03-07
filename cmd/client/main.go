@@ -1,11 +1,10 @@
 package main
 
 import (
-	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/keepalive"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/handler/message"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/handler"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/services"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/services/device"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -59,7 +58,6 @@ func main() {
 
 	// 服务端, 接受 SIP 指令
 	srv, _ := sipgo.NewServer(ua, sipgo.WithServerLogger(logger))
-
 	quit := make(chan os.Signal, 1)
 	go func() {
 		defer func() {
@@ -79,12 +77,12 @@ func main() {
 
 	time.Sleep(1 * time.Second)
 
-	message.SetupMessageHandler(srv, client, clientConfig)
-	device.SetupRegister(client, clientConfig)
-	defer device.StopAllRegister()
-	keepalive.SetupKeepalive(client, clientConfig)
-	device.StartKeepAlive(client)
-	defer device.StopKeepAlive()
+	handler.SetupMessageHandler(srv, client, clientConfig)
+	services.SetupRegister(client, clientConfig)
+	defer services.StopAllRegister()
+	handler.SetupKeepalive(client, clientConfig)
+	services.StartKeepAlive(client)
+	defer services.StopKeepAlive()
 
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	<-quit

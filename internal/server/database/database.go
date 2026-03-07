@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/config"
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"

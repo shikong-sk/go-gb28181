@@ -1,9 +1,9 @@
-package keepalive
+package handler
 
 import (
-	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/services"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/services/device"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils/charset"
 	"github.com/duke-git/lancet/v2/random"
@@ -12,7 +12,7 @@ import (
 )
 
 func SetupKeepalive(client *sipgo.Client, clientConfig *config.ClientConfig) {
-	device.AddKeepaliveSender(clientConfig.DeviceId, func(client *sipgo.Client) {
+	services.AddKeepaliveSender(clientConfig.DeviceId, func(client *sipgo.Client) {
 		sn := random.RandNumeral(6)
 		data := manscdp.NewKeepAliveReqWithOK(sn, clientConfig.DeviceId)
 		target := sip.Uri{

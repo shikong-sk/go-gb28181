@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
-	"git.skcks.cn/Shikong/go-gb28181/internal/repository"
-	"git.skcks.cn/Shikong/go-gb28181/internal/service"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"github.com/gin-gonic/gin"
 )

@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
 	"gorm.io/gorm"
 )
 

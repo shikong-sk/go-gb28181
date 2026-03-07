@@ -3,8 +3,8 @@ package service
 import (
 	"time"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
-	"git.skcks.cn/Shikong/go-gb28181/internal/repository"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"gorm.io/gorm"
 )

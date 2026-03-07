@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/config"
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
-	"git.skcks.cn/Shikong/go-gb28181/internal/service"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp/cmdtype"

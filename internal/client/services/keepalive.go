@@ -1,4 +1,4 @@
-package device
+package services
 
 import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"

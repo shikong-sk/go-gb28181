@@ -3,7 +3,7 @@ package http
 import (
 	"net/http"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/service"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"github.com/gin-gonic/gin"
 )

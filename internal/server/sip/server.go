@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/config"
-	"git.skcks.cn/Shikong/go-gb28181/internal/model"
-	"git.skcks.cn/Shikong/go-gb28181/internal/service"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
@@ -152,7 +152,10 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	body := req.Body()
-	log.Debug().Str("body", string(body)).Msg("收到 SIP MESSAGE")
+
+	// 转换为 UTF-8 用于日志输出
+	bodyUTF8, _ := utils.DetectAndConvertToUTF8(body)
+	log.Debug().Str("body", string(bodyUTF8)).Msg("收到 SIP MESSAGE")
 
 	// 解析 XML 消息头（通用解析，支持 Query/Response/Notify）
 	header := new(manscdp.MessageHeader)
@@ -168,15 +171,16 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 	// 根据消息类型处理
 	switch header.CmdType {
 	case "Catalog":
-		s.handleCatalogMessage(req, body)
+		s.handleCatalogMessage(req, bodyUTF8)
 	case "Keepalive":
-		s.handleKeepaliveMessage(req, body)
+		s.handleKeepaliveMessage(req, bodyUTF8)
 	case "Alarm":
-		s.handleAlarmMessage(req, body)
+		s.handleAlarmMessage(req, bodyUTF8)
 	default:
 		log.Warn().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("未处理的 MANSCDP 消息类型")
 	}
 
+	// 响应 200 OK
 	// 响应 200 OK
 	resp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	if err := tx.Respond(resp); err != nil {

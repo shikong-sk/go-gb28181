@@ -1,9 +1,9 @@
-package device
+package services
 
 import (
 	"context"
 	"fmt"
-	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"

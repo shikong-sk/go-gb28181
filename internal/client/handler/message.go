@@ -1,7 +1,7 @@
-package message
+package handler
 
 import (
-	"git.skcks.cn/Shikong/go-gb28181/pkg/config"
+	"git.skcks.cn/Shikong/go-gb28181/internal/client/config"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"

@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"git.skcks.cn/Shikong/go-gb28181/internal/repository"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
