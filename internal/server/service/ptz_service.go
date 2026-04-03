@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
@@ -51,8 +50,8 @@ func (s *PTZService) PTZControl(deviceId, channelId string, direction manscdp.PT
 	// 构建云台控制命令
 	ptzCmd := manscdp.BuildPTZCmd(direction, horizontalSpeed, verticalSpeed)
 
-	// 生成 SN
-	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// 生成安全序列号
+	sn := utils.GenerateSN()
 
 	// 构建控制请求
 	controlReq := manscdp.NewPTZControlReq(sn, channelId, ptzCmd)

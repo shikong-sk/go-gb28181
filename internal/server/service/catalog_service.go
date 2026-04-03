@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
@@ -47,8 +46,8 @@ func (s *CatalogService) SyncCatalog(deviceID string) error {
 		return fmt.Errorf("设备不存在: %w", err)
 	}
 
-	// 构建目录查询请求
-	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// 生成安全序列号
+	sn := utils.GenerateSN()
 	catalogReq := manscdp.NewCatalogReq(cmdtype.Catalog, sn, deviceID)
 
 	// 编码为 XML (GBK)

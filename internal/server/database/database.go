@@ -128,6 +128,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Device{},
 		&model.Channel{},
 		&model.Alarm{},
+		&model.DevicePosition{}, // 新增
 	)
 }
 

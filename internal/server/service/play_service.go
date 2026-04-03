@@ -51,10 +51,12 @@ type PlaySession struct {
 	Mode       PlayMode   // 播放模式
 	RangeStart *time.Time // 回放开始时间
 	RangeEnd   *time.Time // 回放结束时间
+	TargetHost string     // 目标设备 IP
+	TargetPort int        // 目标设备端口
 	Via        string     // Via header value
-	CallID     string     // Call-ID
-	From       string     // From header
-	To         string     // To header (from 200 OK response)
+	CallID     string     // Call-ID value
+	From       string     // From header value
+	To         string     // To header value (from 200 OK response)
 	CSeq       int        // CSeq number
 }
 
@@ -127,6 +129,17 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		return nil, fmt.Errorf("打开 RTP 服务器失败: %w", err)
 	}
 
+	// 获取设备地址
+	deviceIP := s.config.ZLMHost
+	devicePort := 5060
+	if s.deviceService != nil {
+		device, err := s.deviceService.GetDevice(deviceId)
+		if err == nil && device.IP != "" {
+			deviceIP = device.IP
+			devicePort = device.Port
+		}
+	}
+
 	session := &PlaySession{
 		StreamId:   streamId,
 		DeviceId:   deviceId,
@@ -138,6 +151,8 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		Mode:       mode,
 		RangeStart: rangeStart,
 		RangeEnd:   rangeEnd,
+		TargetHost: deviceIP,
+		TargetPort: devicePort,
 	}
 
 	s.mu.Lock()
@@ -486,4 +501,54 @@ func (s *PlayService) CleanupStaleSessions(timeout time.Duration) {
 // GetMediaInfo 获取媒体信息
 func (s *PlayService) GetMediaInfo(streamId string) (*types.GetMediaListResp, error) {
 	return s.zlm.GetMediaList(s.config.AppName, streamId)
+}
+
+// GetSessionByStreamId 根据 StreamId 查找会话
+func (s *PlayService) GetSessionByStreamId(streamId string) *PlaySession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	session, exists := s.sessions[streamId]
+	if !exists {
+		return nil
+	}
+	return session
+}
+
+// RemoveSession 移除会话
+func (s *PlayService) RemoveSession(callId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 根据 CallID 查找会话
+	for streamId, session := range s.sessions {
+		if session.CallID == callId {
+			delete(s.sessions, streamId)
+			log.Info().Str("stream_id", streamId).Str("call_id", callId).Msg("会话已移除")
+			return
+		}
+	}
+}
+
+// OnMediaStatusReceived 处理媒体状态通知（录像结束等）
+func (s *PlayService) OnMediaStatusReceived(streamId string) error {
+	// 根据 StreamId 找到会话
+	session := s.GetSessionByStreamId(streamId)
+	if session == nil {
+		log.Warn().Str("stream_id", streamId).Msg("未找到对应的播放会话")
+		return nil
+	}
+
+	// 关闭 RTP Server
+	_, err := s.zlm.CloseRtpServer(streamId)
+	if err != nil {
+		log.Error().Err(err).Str("stream_id", streamId).Msg("关闭 RTP Server 失败")
+	}
+
+	// 清理会话
+	s.mu.Lock()
+	delete(s.sessions, streamId)
+	s.mu.Unlock()
+
+	log.Info().Str("device_id", session.DeviceId).Str("stream_id", streamId).Msg("录像结束，已清理会话")
+	return nil
 }

@@ -48,6 +48,14 @@ type AlarmItem struct {
 
 // List 获取报警列表
 func (h *AlarmHandler) List(c *gin.Context) {
+	if h.alarmService == nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "报警服务未初始化",
+		})
+		return
+	}
+
 	var req ListAlarmsRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -95,6 +103,14 @@ func (h *AlarmHandler) List(c *gin.Context) {
 
 // GetAlarm 获取报警详情
 func (h *AlarmHandler) GetAlarm(c *gin.Context) {
+	if h.alarmService == nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "报警服务未初始化",
+		})
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
@@ -123,6 +139,14 @@ func (h *AlarmHandler) GetAlarm(c *gin.Context) {
 
 // DeleteAlarm 删除报警
 func (h *AlarmHandler) DeleteAlarm(c *gin.Context) {
+	if h.alarmService == nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "报警服务未初始化",
+		})
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
@@ -149,8 +173,15 @@ func (h *AlarmHandler) DeleteAlarm(c *gin.Context) {
 }
 
 // DeleteAll 清空所有报警记录
-// DeleteAll 清空所有报警记录
 func (h *AlarmHandler) DeleteAll(c *gin.Context) {
+	if h.alarmService == nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "报警服务未初始化",
+		})
+		return
+	}
+
 	if err := h.alarmService.DeleteAll(); err != nil {
 		log.Error().Err(err).Msg("清空报警记录失败")
 		c.JSON(http.StatusInternalServerError, Response{
@@ -168,6 +199,14 @@ func (h *AlarmHandler) DeleteAll(c *gin.Context) {
 
 // GetConfig 获取报警配置
 func (h *AlarmHandler) GetConfig(c *gin.Context) {
+	if h.alarmService == nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "报警服务未初始化",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",

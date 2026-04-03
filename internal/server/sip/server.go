@@ -27,6 +27,11 @@ type SIPServer struct {
 	alarmService  *service.AlarmService
 	recordService *service.RecordService
 
+	// 新增服务
+	subscriptionService *service.SubscriptionService
+	positionService     *service.PositionService
+	playService         *service.PlayService
+
 	ua         *sipgo.UserAgent
 	client     *sipgo.Client
 	server     *sipgo.Server
@@ -48,6 +53,21 @@ func NewSIPServer(cfg *config.Config, deviceService *service.DeviceService, alar
 // SetRecordService 设置录像查询服务
 func (s *SIPServer) SetRecordService(recordService *service.RecordService) {
 	s.recordService = recordService
+}
+
+// SetSubscriptionService 设置订阅服务
+func (s *SIPServer) SetSubscriptionService(subscriptionService *service.SubscriptionService) {
+	s.subscriptionService = subscriptionService
+}
+
+// SetPositionService 设置定位服务
+func (s *SIPServer) SetPositionService(positionService *service.PositionService) {
+	s.positionService = positionService
+}
+
+// SetPlayService 设置播放服务
+func (s *SIPServer) SetPlayService(playService *service.PlayService) {
+	s.playService = playService
 }
 
 // Start 启动 SIP 服务
@@ -181,6 +201,12 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleAlarmMessage(req, bodyUTF8)
 	case "RecordInfo":
 		s.handleRecordInfoMessage(req, bodyUTF8)
+	case "DeviceStatus":
+		s.handleDeviceStatusMessage(req, bodyUTF8)
+	case "MobilePosition":
+		s.handleMobilePositionMessage(req, bodyUTF8)
+	case "MediaStatus":
+		s.handleMediaStatusMessage(req, bodyUTF8)
 	default:
 		log.Warn().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("未处理的 MANSCDP 消息类型")
 	}
@@ -322,6 +348,102 @@ func (s *SIPServer) handleRecordInfoMessage(req *sip.Request, body []byte) {
 	// 转发给 RecordService 处理
 	if s.recordService != nil {
 		s.recordService.HandleRecordInfoResponse(resp)
+	}
+}
+
+// handleDeviceStatusMessage 处理 DeviceStatus 消息
+func (s *SIPServer) handleDeviceStatusMessage(req *sip.Request, body []byte) {
+	// 解析响应
+	var resp manscdp.DeviceStatusResp
+	err := utils.XMLUnmarshal([]byte(body), &resp)
+	if err != nil {
+		log.Error().Err(err).Msg("解析 DeviceStatus 响应失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", resp.DeviceID).
+		Str("sn", resp.SN).
+		Str("result", resp.Result).
+		Str("online", resp.Online).
+		Str("status", resp.Status).
+		Msg("收到设备状态响应")
+
+	// 通知订阅服务
+	if s.subscriptionService != nil {
+		s.subscriptionService.NotifyResponse(resp.DeviceID, resp.SN, &resp)
+	}
+
+	// 更新设备状态到数据库（可选）
+	if s.deviceService != nil {
+		// TODO: 实现设备状态更新逻辑
+		log.Debug().Str("device_id", resp.DeviceID).Msg("设备状态响应已处理")
+	}
+}
+
+// handleMobilePositionMessage 处理 MobilePosition 消息
+func (s *SIPServer) handleMobilePositionMessage(req *sip.Request, body []byte) {
+	// 解析 Notify
+	var notify manscdp.MobilePositionNotify
+	err := utils.XMLUnmarshal([]byte(body), &notify)
+	if err != nil {
+		log.Error().Err(err).Msg("解析 MobilePosition 上报失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", notify.DeviceID).
+		Str("sn", notify.SN).
+		Float64("longitude", notify.Longitude).
+		Float64("latitude", notify.Latitude).
+		Float64("speed", notify.Speed).
+		Int("direction", notify.Direction).
+		Float64("altitude", notify.Altitude).
+		Str("gps_time", notify.GPSTime).
+		Msg("收到移动设备定位上报")
+
+	// 调用 PositionService 处理
+	if s.positionService != nil {
+		if err := s.positionService.OnMobilePositionReceived(&notify); err != nil {
+			log.Error().Err(err).Str("device_id", notify.DeviceID).Msg("处理 MobilePosition 失败")
+		}
+	} else {
+		log.Warn().Str("device_id", notify.DeviceID).Msg("定位服务未初始化，无法处理定位上报")
+	}
+}
+
+// handleMediaStatusMessage 处理 MediaStatus 消息
+func (s *SIPServer) handleMediaStatusMessage(req *sip.Request, body []byte) {
+	// 解析 Notify
+	var notify manscdp.MediaStatusNotify
+	err := utils.XMLUnmarshal([]byte(body), &notify)
+	if err != nil {
+		log.Error().Err(err).Msg("解析 MediaStatus 通知失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", notify.DeviceID).
+		Str("sn", notify.SN).
+		Int("notify_type", int(notify.NotifyType)).
+		Str("stream_id", notify.StreamId).
+		Msg("收到媒体状态通知")
+
+	// 处理录像结束通知 (NotifyType=121)
+	if notify.NotifyType == manscdp.MediaStatusNotifyTypeRecordEnd {
+		log.Info().Str("stream_id", notify.StreamId).Msg("录像结束通知")
+
+		// 清理播放会话
+		if s.playService != nil {
+			err := s.playService.OnMediaStatusReceived(notify.StreamId)
+			if err != nil {
+				log.Error().Err(err).Str("stream_id", notify.StreamId).Msg("处理 MediaStatus 失败")
+			} else {
+				log.Debug().Str("stream_id", notify.StreamId).Msg("录像结束通知已处理")
+			}
+		} else {
+			log.Warn().Str("stream_id", notify.StreamId).Msg("播放服务未初始化，无法处理录像结束通知")
+		}
 	}
 }
 

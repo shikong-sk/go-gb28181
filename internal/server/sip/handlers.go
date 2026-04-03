@@ -3,7 +3,6 @@ package sip
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"time"
 
@@ -207,8 +206,8 @@ func (h *KeepaliveHandler) keepaliveLoop() {
 
 // sendKeepalive 发送心跳
 func (h *KeepaliveHandler) sendKeepalive() {
-	// 构建心跳消息
-	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// 生成安全序列号
+	sn := utils.GenerateSN()
 	keepaliveReq := manscdp.NewKeepAliveReqWithOK(sn, h.config.SIP.DeviceID)
 
 	body, err := utils.XMLMarshal(keepaliveReq, "gbk")
@@ -322,8 +321,8 @@ func (h *CatalogHandler) SyncCatalog(deviceID string) error {
 		return fmt.Errorf("设备不存在: %w", err)
 	}
 
-	// 构建目录查询请求
-	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// 生成安全序列号
+	sn := utils.GenerateSN()
 	catalogReq := manscdp.NewCatalogReq(cmdtype.Catalog, sn, deviceID)
 
 	body, err := utils.XMLMarshal(catalogReq, "gbk")

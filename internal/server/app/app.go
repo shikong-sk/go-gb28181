@@ -26,12 +26,15 @@ type App struct {
 	config *config.Config
 
 	// 核心服务
-	deviceService  *service.DeviceService
-	catalogService *service.CatalogService
-	playService    *service.PlayService
-	recordService  *service.RecordService
-	alarmService   *service.AlarmService
-	ptzService     *service.PTZService
+	deviceService       *service.DeviceService
+	catalogService      *service.CatalogService
+	playService         *service.PlayService
+	recordService       *service.RecordService
+	alarmService        *service.AlarmService
+	ptzService          *service.PTZService
+	subscriptionService *service.SubscriptionService
+	positionService     *service.PositionService
+	statusService       *service.DeviceStatusService
 
 	// 服务器
 	sipServer  *sip.SIPServer
@@ -39,7 +42,8 @@ type App struct {
 	zlmClient  *zlmediakit.ZLMediaKit
 
 	// 仓库（用于 Start 中初始化服务）
-	deviceRepo *repository.DeviceRepository
+	deviceRepo   *repository.DeviceRepository
+	positionRepo repository.PositionRepository
 
 	// 状态
 	running bool
@@ -71,6 +75,7 @@ func (a *App) Init() error {
 	db := database.GetDB()
 	a.deviceRepo = repository.NewDeviceRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
+	a.positionRepo = repository.NewPositionRepository(db)
 
 	// 3. 初始化业务服务
 	a.deviceService = service.NewDeviceService(a.deviceRepo, channelRepo)
@@ -120,6 +125,12 @@ func (a *App) Start() error {
 		sipClient := a.sipServer.GetClient()
 		localIP := buildSIPLocalIP(a.config)
 
+		// 初始化订阅服务
+		a.subscriptionService = service.NewSubscriptionService(30 * time.Second)
+
+		// 初始化定位服务 (默认保留 7 天)
+		a.positionService = service.NewPositionService(a.positionRepo, 7)
+
 		// 获取 SIP client 用于其他服务
 		a.catalogService = service.NewCatalogService(
 			sipClient,
@@ -131,7 +142,13 @@ func (a *App) Start() error {
 		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url), a.deviceService)
 		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
 		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+		a.statusService = service.NewDeviceStatusService(sipClient, a.deviceService, a.subscriptionService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+
+		// 注入服务到 SIP Server
 		a.sipServer.SetRecordService(a.recordService)
+		a.sipServer.SetSubscriptionService(a.subscriptionService)
+		a.sipServer.SetPositionService(a.positionService)
+		a.sipServer.SetPlayService(a.playService)
 	}
 
 	// 2. 启动 HTTP 服务
@@ -158,7 +175,7 @@ func (a *App) startHTTP() error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService, a.ptzService, a.recordService)
+	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService, a.ptzService, a.recordService, a.subscriptionService, a.positionService, a.statusService, a.deviceService)
 	addr := fmt.Sprintf("%s:%d", a.config.HTTP.Host, a.config.HTTP.Port)
 
 	a.httpServer = &http.Server{

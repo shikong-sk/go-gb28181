@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strconv"
 	"sync"
@@ -83,7 +82,7 @@ func (s *RecordService) QueryRecords(deviceID, channelID string, startTime, endT
 		return nil, fmt.Errorf("获取通道失败: %w", err)
 	}
 
-	sn := fmt.Sprintf("%06d", rand.Intn(1000000))
+	sn := utils.GenerateSN()
 	query := manscdp.NewRecordInfoReq(sn, channelID, startTime, endTime)
 	body, err := utils.XMLMarshal(query, "gbk")
 	if err != nil {

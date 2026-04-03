@@ -10,11 +10,11 @@ import (
 
 // SetupRouter 设置路由
 func SetupRouter() *gin.Engine {
-	return SetupRouterWithServices(nil, nil, nil, nil, nil)
+	return SetupRouterWithServices(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // SetupRouterWithServices 设置路由（带完整服务）
-func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService, alarmService *service.AlarmService, ptzService *service.PTZService, recordService *service.RecordService) *gin.Engine {
+func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService, alarmService *service.AlarmService, ptzService *service.PTZService, recordService *service.RecordService, subscriptionService *service.SubscriptionService, positionService *service.PositionService, statusService *service.DeviceStatusService, deviceService *service.DeviceService) *gin.Engine {
 	router := gin.Default()
 
 	// 健康检查
@@ -34,6 +34,8 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 	alarmHandler := http.NewAlarmHandler(alarmService)
 	ptzHandler := http.NewPTZHandler(ptzService)
 	recordHandler := http.NewRecordHandler(recordService)
+	positionHandler := http.NewPositionHandler(positionService)
+	statusHandler := http.NewDeviceStatusHandler(statusService, deviceService)
 
 	// API 路由组
 	api := router.Group("/api")
@@ -46,6 +48,10 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 			devices.GET("/:device_id", deviceHandler.GetDevice)
 			devices.DELETE("/:device_id", deviceHandler.DeleteDevice)
 			devices.POST("/:device_id/sync", deviceHandler.SyncCatalog)
+			devices.GET("/:device_id/position", positionHandler.GetLatestPosition)
+			devices.GET("/:device_id/positions", positionHandler.GetPositionHistory)
+			devices.GET("/:device_id/status", statusHandler.GetDeviceStatus)
+			devices.POST("/:device_id/query-status", statusHandler.QueryDeviceStatus)
 		}
 
 		// 通道管理
@@ -96,5 +102,5 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 // SetupRouterWithCatalog 设置路由（带目录同步服务）
 // 已废弃，请使用 SetupRouterWithServices
 func SetupRouterWithCatalog(catalogService *service.CatalogService) *gin.Engine {
-	return SetupRouterWithServices(catalogService, nil, nil, nil, nil)
+	return SetupRouterWithServices(catalogService, nil, nil, nil, nil, nil, nil, nil, nil)
 }

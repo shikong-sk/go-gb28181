@@ -19,7 +19,9 @@ GB/T 28181-2016 国标视频监控协议的 Go 语言实现。
 - ✅ 设备注册管理
 - ✅ Digest 认证验证 (支持设备独立密码)
 - ✅ 目录同步
-- [ ] 视频点播 (INVITE/ACK/BYE)
+- ✅ 视频点播 (INVITE/ACK/BYE)
+- ✅ 历史录像查询与回放
+- ✅ 云台控制
 - ✅ 报警记录持久化
 - ✅ HTTP RESTful API
 - ✅ Vue3 前端管理界面
@@ -28,14 +30,16 @@ GB/T 28181-2016 国标视频监控协议的 Go 语言实现。
 
 ## 📋 后续计划
 
-- [ ] **视频点播完善**
-  - PlayService 注入 DeviceService 获取设备真实 IP
-  - INVITE 发送到设备真实地址
-  - BYE 使用正确的 channelId + 设备 IP
-  - BYE 使用 session 保存的 Dialog 信息 (Via/Call-ID/From/To)
-- [ ] **历史录像回放**
-- [ ] **云台控制**
-- [ ] **设备状态实时更新**
+- [x] ~~视频点播完善~~
+  - ✅ PlayService 注入 DeviceService 获取设备真实 IP
+  - ✅ INVITE 发送到设备真实地址
+  - ✅ BYE 使用正确的 channelId + 设备 IP
+  - ✅ BYE 使用 session 保存的 Dialog 信息 (Via/Call-ID/From/To)
+- [x] ~~历史录像回放~~ (已实现 PlayBack 方法)
+- [x] ~~云台控制~~ (已实现 PTZService)
+- [ ] 设备状态实时更新 (WebSocket/SSE)
+- [ ] 移动设备定位 (MobilePosition)
+- [ ] 设备状态查询 (DeviceStatus)
 
 ---
 
