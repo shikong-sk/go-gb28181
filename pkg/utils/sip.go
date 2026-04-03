@@ -2,7 +2,9 @@ package utils
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 )
 
@@ -38,11 +40,11 @@ func GenerateViaTag() string {
 
 // GenerateTag 生成基于时间戳的 tag
 func GenerateTag() string {
-	return string(time.Now().UnixMilli())
+	return strconv.FormatInt(time.Now().UnixMilli(), 10)
 }
 
 // GenerateSN 生成 6 位随机序号
 func GenerateSN() string {
-	n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
-	return string(n.Int64() + 1)
+	n, _ := rand.Int(rand.Reader, big.NewInt(999999))
+	return fmt.Sprintf("%06d", n.Int64()+1)
 }

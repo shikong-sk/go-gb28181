@@ -40,11 +40,20 @@ func XMLMarshal(obj interface{}, charset string) ([]byte, error) {
 	csStr := strings.ToUpper(charset)
 	xmlStr = fmt.Sprintf("<?xml version=\"1.0\" encoding=\"%s\" ?>\r\n%s", csStr, xmlStr)
 
-	// 使用 mahonia 进行编码转换
-	enc := mahonia.NewEncoder(charset)
-	xmlStr = enc.ConvertString(xmlStr)
-
-	return []byte(xmlStr), nil
+	switch csStr {
+	case "", cs.UTF8:
+		return []byte(xmlStr), nil
+	case cs.GBK, cs.GB2312:
+		return convertUTF8ToGBK([]byte(xmlStr))
+	case cs.GB18030:
+		return convertUTF8ToGB18030([]byte(xmlStr))
+	default:
+		enc := mahonia.NewEncoder(charset)
+		if enc == nil {
+			return nil, fmt.Errorf("不支持的 XML 编码: %s", charset)
+		}
+		return []byte(enc.ConvertString(xmlStr)), nil
+	}
 }
 
 // XMLUnmarshal 将XML格式的字节数组data反序列化为对象obj
@@ -192,6 +201,18 @@ func convertGBKToUTF8(data []byte) ([]byte, error) {
 // convertGB18030ToUTF8 将 GB18030 转换为 UTF-8
 func convertGB18030ToUTF8(data []byte) ([]byte, error) {
 	reader := transform.NewReader(bytes.NewReader(data), simplifiedchinese.GB18030.NewDecoder())
+	return io.ReadAll(reader)
+}
+
+// convertUTF8ToGBK 将 UTF-8 转换为 GBK
+func convertUTF8ToGBK(data []byte) ([]byte, error) {
+	reader := transform.NewReader(bytes.NewReader(data), simplifiedchinese.GBK.NewEncoder())
+	return io.ReadAll(reader)
+}
+
+// convertUTF8ToGB18030 将 UTF-8 转换为 GB18030
+func convertUTF8ToGB18030(data []byte) ([]byte, error) {
+	reader := transform.NewReader(bytes.NewReader(data), simplifiedchinese.GB18030.NewEncoder())
 	return io.ReadAll(reader)
 }
 

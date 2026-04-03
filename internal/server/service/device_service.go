@@ -161,6 +161,11 @@ func (s *DeviceService) GetDeviceChannels(deviceID string, page, pageSize int) (
 	return s.channelRepo.ListByDeviceID(deviceID, offset, pageSize)
 }
 
+// GetChannel 获取单个通道
+func (s *DeviceService) GetChannel(deviceID, channelID string) (*model.Channel, error) {
+	return s.channelRepo.GetByChannelID(channelID, deviceID)
+}
+
 // DeleteDevice 删除设备
 func (s *DeviceService) DeleteDevice(deviceID string) error {
 	// 删除设备的所有通道
@@ -180,4 +185,30 @@ func (s *DeviceService) GetDeviceStats() (total, online int64, err error) {
 	}
 	online, err = s.deviceRepo.CountOnline()
 	return
+}
+
+// CheckOfflineDevices 检查离线设备（心跳超时）
+// timeoutMinutes: 心跳超时阈值（分钟），默认 3 分钟（GB28181 心跳间隔 30s，允许丢失 5 次）
+func (s *DeviceService) CheckOfflineDevices(timeoutMinutes int) error {
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = 3 // 默认 3 分钟
+	}
+
+	// 获取心跳超时的设备
+	staleDevices, err := s.deviceRepo.ListStale(timeoutMinutes)
+	if err != nil {
+		log.Error().Err(err).Msg("查询超时设备失败")
+		return err
+	}
+
+	// 将这些设备标记为离线
+	for _, device := range staleDevices {
+		if err := s.OnDeviceOffline(device.DeviceID); err != nil {
+			log.Error().Err(err).Str("device_id", device.DeviceID).Msg("标记设备离线失败")
+		} else {
+			log.Info().Str("device_id", device.DeviceID).Msg("设备心跳超时，标记为离线")
+		}
+	}
+
+	return nil
 }

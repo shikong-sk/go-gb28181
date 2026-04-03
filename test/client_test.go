@@ -15,7 +15,18 @@ import (
 	"time"
 )
 
+func requireIntegrationEnv(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("短模式下跳过集成测试")
+	}
+	if os.Getenv("GB28181_TEST_INTEGRATION") != "1" {
+		t.Skip("未设置 GB28181_TEST_INTEGRATION=1，跳过依赖固定网络环境的集成测试")
+	}
+}
+
 func TestClient(t *testing.T) {
+	requireIntegrationEnv(t)
 	sip.SIPDebug = true
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -134,6 +145,7 @@ func TestClient(t *testing.T) {
 }
 
 func TestCatalog(t *testing.T) {
+	requireIntegrationEnv(t)
 	ua, _ := sipgo.NewUA(
 		sipgo.WithUserAgent("44050100002000000002"),
 		sipgo.WithUserAgentHostname("10.10.10.20:5099"))

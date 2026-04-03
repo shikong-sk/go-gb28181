@@ -519,3 +519,7 @@ AGENTS.md
 /data
 /config.toml
 frontend/dist
+
+CLAUDE.md
+/.claude
+/.omc

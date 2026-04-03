@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,7 +29,9 @@ type App struct {
 	deviceService  *service.DeviceService
 	catalogService *service.CatalogService
 	playService    *service.PlayService
+	recordService  *service.RecordService
 	alarmService   *service.AlarmService
+	ptzService     *service.PTZService
 
 	// 服务器
 	sipServer  *sip.SIPServer
@@ -90,11 +95,7 @@ func (a *App) Init() error {
 
 	// 6. 初始化播放服务
 	if a.zlmClient != nil {
-		a.playService = service.NewPlayService(nil, a.zlmClient, service.PlayConfig{
-			ZLMHost: a.config.ZLMediaKit.Url,
-			ZLMPort: 80,
-			AppName: "rtp",
-		})
+		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url), a.deviceService)
 	}
 
 	log.Info().Msg("应用初始化完成")
@@ -115,19 +116,22 @@ func (a *App) Start() error {
 		if err := a.sipServer.Start(); err != nil {
 			return fmt.Errorf("启动 SIP 服务失败: %w", err)
 		}
+
+		sipClient := a.sipServer.GetClient()
+		localIP := buildSIPLocalIP(a.config)
+
 		// 获取 SIP client 用于其他服务
 		a.catalogService = service.NewCatalogService(
-			a.sipServer.GetClient(),
+			sipClient,
 			a.deviceRepo,
 			a.config.SIP.DeviceID,
-			a.config.SIP.ListenIP,
+			localIP,
 			a.config.SIP.ListenPort,
 		)
-		a.playService = service.NewPlayService(a.sipServer.GetClient(), a.zlmClient, service.PlayConfig{
-			ZLMHost: "127.0.0.1",
-			ZLMPort: 80,
-			AppName: "rtp",
-		})
+		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url), a.deviceService)
+		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
+		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+		a.sipServer.SetRecordService(a.recordService)
 	}
 
 	// 2. 启动 HTTP 服务
@@ -140,28 +144,23 @@ func (a *App) Start() error {
 	a.running = true
 	log.Info().Msg("应用启动成功")
 
-	// 启动报警清理定时任务
 	go a.startAlarmCleanup()
+	go a.startOfflineCheck()
 
 	return nil
 }
 
 // startHTTP 启动 HTTP 服务
 func (a *App) startHTTP() error {
-	// 设置 Gin 模式
 	if a.config.Debug {
 		gin.SetMode(gin.DebugMode)
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// 创建路由
-	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService)
-
-	// HTTP 服务地址
+	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService, a.ptzService, a.recordService)
 	addr := fmt.Sprintf("%s:%d", a.config.HTTP.Host, a.config.HTTP.Port)
 
-	// 创建 HTTP 服务器
 	a.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      r,
@@ -169,7 +168,6 @@ func (a *App) startHTTP() error {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	// 启动 HTTP 服务 (goroutine)
 	go func() {
 		log.Info().Str("addr", addr).Msg("HTTP 服务启动")
 		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -191,7 +189,6 @@ func (a *App) Stop() {
 
 	log.Info().Msg("正在停止应用...")
 
-	// 1. 停止 HTTP 服务
 	if a.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -200,15 +197,12 @@ func (a *App) Stop() {
 		}
 	}
 
-	// 2. 停止 SIP 服务
 	if a.sipServer != nil {
 		a.sipServer.Stop()
 	}
 
-	// 3. 关闭数据库
 	database.Close()
 
-	// 4. 取消上下文
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -236,6 +230,26 @@ func (a *App) startAlarmCleanup() {
 	}
 }
 
+// startOfflineCheck 启动设备离线检测定时任务 (每分钟执行)
+func (a *App) startOfflineCheck() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			if a.deviceService != nil {
+				// GB28181 心跳间隔 30s，允许丢失 5 次，超时阈值 3 分钟
+				if err := a.deviceService.CheckOfflineDevices(3); err != nil {
+					log.Error().Err(err).Msg("设备离线检测失败")
+				}
+			}
+		}
+	}
+}
+
 // GetDeviceService 获取设备服务
 func (a *App) GetDeviceService() *service.DeviceService {
 	return a.deviceService
@@ -249,6 +263,11 @@ func (a *App) GetCatalogService() *service.CatalogService {
 // GetPlayService 获取播放服务
 func (a *App) GetPlayService() *service.PlayService {
 	return a.playService
+}
+
+// GetRecordService 获取录像服务
+func (a *App) GetRecordService() *service.RecordService {
+	return a.recordService
 }
 
 // GetAlarmService 获取报警服务
@@ -271,4 +290,45 @@ func (a *App) IsRunning() bool {
 // Wait 等待应用停止
 func (a *App) Wait() {
 	<-a.ctx.Done()
+}
+
+func buildPlayConfig(rawURL string) service.PlayConfig {
+	host := "127.0.0.1"
+	port := 80
+	parsedURL := rawURL
+	if parsedURL != "" && !strings.Contains(parsedURL, "://") {
+		parsedURL = "http://" + parsedURL
+	}
+	if parsedURL != "" {
+		if parsed, err := url.Parse(parsedURL); err == nil {
+			if parsed.Hostname() != "" {
+				host = parsed.Hostname()
+			}
+			if parsed.Port() != "" {
+				if parsedPort, err := strconv.Atoi(parsed.Port()); err == nil {
+					port = parsedPort
+				}
+			} else if parsed.Scheme == "https" {
+				port = 443
+			}
+		}
+	}
+	return service.PlayConfig{
+		ZLMHost: host,
+		ZLMPort: port,
+		AppName: "rtp",
+	}
+}
+
+func buildSIPLocalIP(cfg *config.Config) string {
+	if cfg.SIP.ExternalIP != "" {
+		return cfg.SIP.ExternalIP
+	}
+	if cfg.SIP.ServerIP != "" && cfg.SIP.ServerIP != "0.0.0.0" {
+		return cfg.SIP.ServerIP
+	}
+	if cfg.SIP.ListenIP != "" && cfg.SIP.ListenIP != "0.0.0.0" {
+		return cfg.SIP.ListenIP
+	}
+	return "127.0.0.1"
 }

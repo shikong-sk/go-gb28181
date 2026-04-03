@@ -139,3 +139,15 @@ func (r *DeviceRepository) Upsert(device *model.Device) error {
 	device.ID = existing.ID
 	return r.Update(device)
 }
+
+// ListStale 查找心跳超时的设备（用于离线检测）
+// timeoutMinutes: 心跳超时时间（分钟）
+func (r *DeviceRepository) ListStale(timeoutMinutes int) ([]model.Device, error) {
+	var devices []model.Device
+	// 查找状态为在线但心跳时间超过阈值的设备
+	err := r.db.Model(&model.Device{}).
+		Where("status = ? AND last_keepalive_time < datetime('now', '-' || ? || ' minutes')",
+			model.DeviceStatusOnline, timeoutMinutes).
+		Find(&devices).Error
+	return devices, err
+}

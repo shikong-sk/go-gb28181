@@ -116,9 +116,10 @@ func (z *ZLMediaKit) CloseRtpServer(streamId string) (*types.CloseRtpServerResp,
 }
 
 // GetMediaList 获取媒体列表
-func (z *ZLMediaKit) GetMediaList(app string) (*types.GetMediaListResp, error) {
+func (z *ZLMediaKit) GetMediaList(app, stream string) (*types.GetMediaListResp, error) {
 	req := &types.GetMediaListReq{
-		App: app,
+		App:    app,
+		Stream: stream,
 	}
 
 	resp, err := z.client.R().

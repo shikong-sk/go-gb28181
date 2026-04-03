@@ -25,6 +25,7 @@ type SIPServer struct {
 	config        *config.Config
 	deviceService *service.DeviceService
 	alarmService  *service.AlarmService
+	recordService *service.RecordService
 
 	ua         *sipgo.UserAgent
 	client     *sipgo.Client
@@ -42,6 +43,11 @@ func NewSIPServer(cfg *config.Config, deviceService *service.DeviceService, alar
 		deviceService: deviceService,
 		alarmService:  alarmService,
 	}
+}
+
+// SetRecordService 设置录像查询服务
+func (s *SIPServer) SetRecordService(recordService *service.RecordService) {
+	s.recordService = recordService
 }
 
 // Start 启动 SIP 服务
@@ -173,6 +179,8 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleKeepaliveMessage(req, bodyUTF8)
 	case "Alarm":
 		s.handleAlarmMessage(req, bodyUTF8)
+	case "RecordInfo":
+		s.handleRecordInfoMessage(req, bodyUTF8)
 	default:
 		log.Warn().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("未处理的 MANSCDP 消息类型")
 	}
@@ -294,6 +302,26 @@ func (s *SIPServer) handleAlarmMessage(req *sip.Request, body []byte) {
 		if err := s.alarmService.SaveAlarm(alarmRecord); err != nil {
 			log.Error().Err(err).Str("device_id", alarm.DeviceID).Msg("保存报警失败")
 		}
+	}
+}
+
+// handleRecordInfoMessage 处理 RecordInfo 消息
+func (s *SIPServer) handleRecordInfoMessage(req *sip.Request, body []byte) {
+	resp := new(manscdp.RecordInfoResp)
+	if err := utils.XMLUnmarshal(body, resp); err != nil {
+		log.Error().Err(err).Msg("解析 RecordInfo 消息失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", resp.DeviceID).
+		Str("sn", resp.SN).
+		Str("sum_num", resp.SumNum).
+		Msg("收到历史录像查询响应")
+
+	// 转发给 RecordService 处理
+	if s.recordService != nil {
+		s.recordService.HandleRecordInfoResponse(resp)
 	}
 }
 

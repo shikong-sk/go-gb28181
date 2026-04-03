@@ -63,7 +63,7 @@ func Register(client *sipgo.Client, clientConfig *config.ClientConfig) {
 	for _, h := range headers {
 		log.Log().Info().Msgf("%v => %v", h.Name(), h.Value())
 	}
-	log.Log().Info().Msgf(resp.String())
+	log.Log().Info().Msg(resp.String())
 
 	// 如果状态码是401，则需要验证
 	if resp.StatusCode == 401 {
@@ -106,7 +106,7 @@ func Register(client *sipgo.Client, clientConfig *config.ClientConfig) {
 			log.Log().Error().Msgf("设备:%s 注册失败", clientConfig.DeviceId)
 		}
 
-		log.Log().Info().Msgf(resp.String())
+		log.Log().Info().Msg(resp.String())
 	}
 }
 

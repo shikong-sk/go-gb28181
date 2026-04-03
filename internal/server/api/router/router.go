@@ -10,11 +10,11 @@ import (
 
 // SetupRouter 设置路由
 func SetupRouter() *gin.Engine {
-	return SetupRouterWithServices(nil, nil, nil)
+	return SetupRouterWithServices(nil, nil, nil, nil, nil)
 }
 
 // SetupRouterWithServices 设置路由（带完整服务）
-func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService, alarmService *service.AlarmService) *gin.Engine {
+func SetupRouterWithServices(catalogService *service.CatalogService, playService *service.PlayService, alarmService *service.AlarmService, ptzService *service.PTZService, recordService *service.RecordService) *gin.Engine {
 	router := gin.Default()
 
 	// 健康检查
@@ -32,6 +32,8 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 	channelHandler := http.NewChannelHandler(channelRepo)
 	playHandler := http.NewPlayHandler(playService)
 	alarmHandler := http.NewAlarmHandler(alarmService)
+	ptzHandler := http.NewPTZHandler(ptzService)
+	recordHandler := http.NewRecordHandler(recordService)
 
 	// API 路由组
 	api := router.Group("/api")
@@ -60,6 +62,7 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 		{
 			play.POST("/start", playHandler.Play)
 			play.POST("/stop", playHandler.Stop)
+			play.POST("/playback", playHandler.PlayBack)
 			play.GET("/sessions", playHandler.ListSessions)
 			play.GET("/media/:stream_id", playHandler.GetMediaInfo)
 		}
@@ -72,6 +75,19 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 			alarms.GET("/:id", alarmHandler.GetAlarm)
 			alarms.DELETE("/:id", alarmHandler.DeleteAlarm)
 		}
+
+		// 云台控制
+		ptz := api.Group("/ptz")
+		{
+			ptz.POST("/control", ptzHandler.Control)
+			ptz.POST("/stop", ptzHandler.Stop)
+		}
+
+		// 历史录像
+		record := api.Group("/record")
+		{
+			record.GET("/list", recordHandler.List)
+		}
 	}
 
 	return router
@@ -80,5 +96,5 @@ func SetupRouterWithServices(catalogService *service.CatalogService, playService
 // SetupRouterWithCatalog 设置路由（带目录同步服务）
 // 已废弃，请使用 SetupRouterWithServices
 func SetupRouterWithCatalog(catalogService *service.CatalogService) *gin.Engine {
-	return SetupRouterWithServices(catalogService, nil, nil)
+	return SetupRouterWithServices(catalogService, nil, nil, nil, nil)
 }

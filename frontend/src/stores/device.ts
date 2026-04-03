@@ -26,15 +26,16 @@ export const useDeviceStore = defineStore('device', () => {
   const offlineDevices = computed(() => devices.value.filter((d) => d.status === '0'))
 
   /** 获取设备列表 */
-  async function fetchDevices() {
+  async function fetchDevices(params?: DeviceQuery) {
     loading.value = true
     try {
-      const params: DeviceQuery = {
+      const query: DeviceQuery = {
         page: pagination.value.page,
         pageSize: pagination.value.pageSize,
         ...filter.value,
+        ...params,
       }
-      const res = await deviceApi.getList(params)
+      const res = await deviceApi.getList(query)
       if (res.data) {
         devices.value = res.data.list || []
         total.value = res.data.total || 0

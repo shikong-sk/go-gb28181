@@ -87,6 +87,7 @@ export interface ChannelQuery {
   page?: number
   pageSize?: number
   deviceId?: string
+  status?: ChannelStatus
 }
 
 /** 通道列表响应 */
