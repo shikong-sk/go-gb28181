@@ -16,9 +16,11 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/service"
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/sip"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/websocket"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 // App 应用管理器 - 统一管理所有服务
@@ -26,23 +28,32 @@ type App struct {
 	config *config.Config
 
 	// 核心服务
-	deviceService       *service.DeviceService
-	catalogService      *service.CatalogService
-	playService         *service.PlayService
-	recordService       *service.RecordService
-	alarmService        *service.AlarmService
-	ptzService          *service.PTZService
-	subscriptionService *service.SubscriptionService
-	positionService     *service.PositionService
-	statusService       *service.DeviceStatusService
+	deviceService              *service.DeviceService
+	catalogService             *service.CatalogService
+	catalogSubscriptionService *service.CatalogSubscriptionService
+	playService                *service.PlayService
+	recordService              *service.RecordService
+	downloadService            *service.DownloadService // 录像下载服务
+	alarmService               *service.AlarmService
+	alarmSubscriptionService   *service.AlarmSubscriptionService // 报警订阅服务
+	ptzService                 *service.PTZService
+	subscriptionService        *service.SubscriptionService
+	positionService            *service.PositionService
+	statusService              *service.DeviceStatusService
+	infoService                *service.DeviceInfoService
+	eventService               *service.EventService // 事件发布服务
+	ssrcService                *service.SsrcService  // SSRC 管理服务
 
 	// 服务器
-	sipServer  *sip.SIPServer
-	httpServer *http.Server
-	zlmClient  *zlmediakit.ZLMediaKit
+	sipServer   *sip.SIPServer
+	httpServer  *http.Server
+	zlmClient   *zlmediakit.ZLMediaKit
+	wsManager   *websocket.WebSocketManager // WebSocket 管理器
+	redisClient *redis.Client               // Redis 客户端
 
 	// 仓库（用于 Start 中初始化服务）
 	deviceRepo   *repository.DeviceRepository
+	channelRepo  *repository.ChannelRepository
 	positionRepo repository.PositionRepository
 
 	// 状态
@@ -74,17 +85,38 @@ func (a *App) Init() error {
 	// 2. 初始化仓库
 	db := database.GetDB()
 	a.deviceRepo = repository.NewDeviceRepository(db)
-	channelRepo := repository.NewChannelRepository(db)
+	a.channelRepo = repository.NewChannelRepository(db)
 	a.positionRepo = repository.NewPositionRepository(db)
 
-	// 3. 初始化业务服务
-	a.deviceService = service.NewDeviceService(a.deviceRepo, channelRepo)
+	// 3. 初始化事件服务（WebSocketManager 暂未初始化，事件仅记录日志）
+	a.eventService = service.NewEventService()
+
+	// 4. 初始化业务服务
+	a.deviceService = service.NewDeviceService(a.deviceRepo, a.channelRepo, a.eventService)
 
 	// 初始化报警服务
 	alarmRepo := repository.NewAlarmRepository(db)
-	a.alarmService = service.NewAlarmService(alarmRepo, &a.config.Alarm)
+	a.alarmService = service.NewAlarmService(alarmRepo, &a.config.Alarm, a.eventService)
 
-	// 4. 初始化 ZLMediaKit 客户端
+	// 5. 初始化 Redis 客户端
+	a.redisClient = redis.NewClient(&redis.Options{
+		Addr:     a.config.Redis.Addr,
+		Password: a.config.Redis.Password,
+		DB:       a.config.Redis.DB,
+	})
+
+	// 测试 Redis 连接
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.redisClient.Ping(ctx).Err(); err != nil {
+		log.Warn().Err(err).Msg("Redis 连接失败，SSRC 管理服务将不可用")
+	} else {
+		log.Info().Str("addr", a.config.Redis.Addr).Msg("Redis 连接成功")
+		// 初始化 SSRC 服务
+		a.ssrcService = service.NewSsrcService(a.redisClient, a.config.SIP.ServerID)
+	}
+
+	// 6. 初始化 ZLMediaKit 客户端
 	zlmCfg := &zlmediakit.Config{
 		Url:    a.config.ZLMediaKit.Url,
 		Secret: a.config.ZLMediaKit.Secret,
@@ -93,14 +125,14 @@ func (a *App) Init() error {
 	zlmediakit.SetupZLMediaKitService(zlmCfg)
 	a.zlmClient = zlmediakit.GetZLMediaKitService()
 
-	// 5. 初始化 SIP 服务
+	// 7. 初始化 SIP 服务
 	if a.config.SIP.Enabled {
 		a.sipServer = sip.NewSIPServer(a.config, a.deviceService, a.alarmService)
 	}
 
-	// 6. 初始化播放服务
+	// 8. 初始化播放服务
 	if a.zlmClient != nil {
-		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url), a.deviceService)
+		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, a.config.SIP.ListenIP, a.config.SIP.ListenPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
 	}
 
 	log.Info().Msg("应用初始化完成")
@@ -116,7 +148,13 @@ func (a *App) Start() error {
 		return nil
 	}
 
-	// 1. 启动 SIP 服务
+	// 1. 初始化并启动 WebSocket 服务
+	a.wsManager = websocket.NewWebSocketManager()
+	a.eventService.SetWebSocketManager(a.wsManager)
+	go a.wsManager.Start()
+	log.Info().Msg("WebSocket 服务已启动")
+
+	// 2. 启动 SIP 服务
 	if a.sipServer != nil {
 		if err := a.sipServer.Start(); err != nil {
 			return fmt.Errorf("启动 SIP 服务失败: %w", err)
@@ -139,22 +177,65 @@ func (a *App) Start() error {
 			localIP,
 			a.config.SIP.ListenPort,
 		)
-		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url), a.deviceService)
+		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, a.config.SIP.ListenIP, a.config.SIP.ListenPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
+		a.downloadService = service.NewDownloadService(a.playService)
 		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
 		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
 		a.statusService = service.NewDeviceStatusService(sipClient, a.deviceService, a.subscriptionService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+		a.infoService = service.NewDeviceInfoService(sipClient, a.deviceService, a.subscriptionService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+
+		// 初始化报警订阅服务
+		db := database.GetDB()
+		alarmRepo := repository.NewAlarmRepository(db)
+		a.alarmSubscriptionService = service.NewAlarmSubscriptionService(
+			sipClient,
+			a.deviceRepo,
+			alarmRepo,
+			a.alarmService,
+			a.eventService,
+			a.config.SIP.DeviceID,
+			localIP,
+			a.config.SIP.ListenPort,
+		)
 
 		// 注入服务到 SIP Server
 		a.sipServer.SetRecordService(a.recordService)
 		a.sipServer.SetSubscriptionService(a.subscriptionService)
 		a.sipServer.SetPositionService(a.positionService)
 		a.sipServer.SetPlayService(a.playService)
+		a.sipServer.SetAlarmSubscriptionService(a.alarmSubscriptionService)
 	}
 
-	// 2. 启动 HTTP 服务
+	// 3. 启动 HTTP 服务
 	if a.config.HTTP.Enabled {
 		if err := a.startHTTP(); err != nil {
 			return fmt.Errorf("启动 HTTP 服务失败: %w", err)
+		}
+	}
+
+	// 4. 动态配置 ZLM Hook（在 ZLM 初始化和 HTTP 服务启动后）
+	if a.zlmClient != nil && a.config.HTTP.Enabled {
+		// 先获取当前配置，避免清空其他配置项
+		currentConfig, err := a.zlmClient.GetServerConfig()
+		if err != nil {
+			log.Warn().Err(err).Msg("获取 ZLM 配置失败，跳过 Hook 配置")
+		} else if len(currentConfig.Data) > 0 {
+			// 只修改 Hook 相关配置
+			hookBaseURL := fmt.Sprintf("http://%s:%d/index/api/hook",
+				a.config.HTTP.Host, a.config.HTTP.Port)
+
+			config := &currentConfig.Data[0]
+			config.HookEnable = "1"
+			config.HookOnPublish = hookBaseURL + "/on_publish"
+			config.HookOnStreamChanged = hookBaseURL + "/on_stream_changed"
+			config.HookOnStreamNoneReader = hookBaseURL + "/on_stream_none_reader"
+			config.HookOnRtpServerTimeout = hookBaseURL + "/on_rtp_server_timeout"
+
+			if _, err := a.zlmClient.SetServerConfig(config); err != nil {
+				log.Warn().Err(err).Msg("配置 ZLM Hook 失败，Hook 功能可能不可用")
+			} else {
+				log.Info().Str("hook_base_url", hookBaseURL).Msg("ZLM Hook 配置成功")
+			}
 		}
 	}
 
@@ -163,6 +244,9 @@ func (a *App) Start() error {
 
 	go a.startAlarmCleanup()
 	go a.startOfflineCheck()
+	go a.startSubscriptionCleanup()
+	go a.startDownloadCleanup()
+	go a.startPlaySessionCleanup()
 
 	return nil
 }
@@ -175,7 +259,7 @@ func (a *App) startHTTP() error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	r := router.SetupRouterWithServices(a.catalogService, a.playService, a.alarmService, a.ptzService, a.recordService, a.subscriptionService, a.positionService, a.statusService, a.deviceService)
+	r := router.SetupRouterWithServices(a.catalogService, a.catalogSubscriptionService, a.playService, a.alarmService, a.alarmSubscriptionService, a.ptzService, a.recordService, a.downloadService, a.subscriptionService, a.positionService, a.statusService, a.deviceService, a.infoService, a.wsManager, a.ssrcService, a.zlmClient)
 	addr := fmt.Sprintf("%s:%d", a.config.HTTP.Host, a.config.HTTP.Port)
 
 	a.httpServer = &http.Server{
@@ -216,6 +300,16 @@ func (a *App) Stop() {
 
 	if a.sipServer != nil {
 		a.sipServer.Stop()
+	}
+
+	if a.wsManager != nil {
+		a.wsManager.Stop()
+	}
+
+	if a.redisClient != nil {
+		if err := a.redisClient.Close(); err != nil {
+			log.Error().Err(err).Msg("Redis 连接关闭失败")
+		}
 	}
 
 	database.Close()
@@ -267,6 +361,72 @@ func (a *App) startOfflineCheck() {
 	}
 }
 
+// startSubscriptionCleanup 启动订阅清理定时任务 (每分钟执行)
+func (a *App) startSubscriptionCleanup() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			log.Info().Msg("订阅清理任务停止")
+			return
+		case <-ticker.C:
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Error().Any("panic", r).Msg("订阅清理任务 panic")
+					}
+				}()
+				if a.subscriptionService != nil {
+					count := a.subscriptionService.CleanupExpired()
+					if count > 0 {
+						log.Info().Int("cleaned", count).Msg("清理过期订阅")
+					}
+				}
+			}()
+		}
+	}
+}
+
+// startDownloadCleanup 启动下载会话清理定时任务 (每小时执行)
+func (a *App) startDownloadCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			log.Info().Msg("下载会话清理任务停止")
+			return
+		case <-ticker.C:
+			if a.downloadService != nil {
+				// 清理超过 24 小时的已完成/已取消/错误会话
+				a.downloadService.CleanupStaleSessions(24 * time.Hour)
+			}
+		}
+	}
+}
+
+// startPlaySessionCleanup 启动播放会话清理定时任务 (每小时执行)
+func (a *App) startPlaySessionCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			log.Info().Msg("播放会话清理任务停止")
+			return
+		case <-ticker.C:
+			if a.playService != nil {
+				// 清理超过 24 小时的过期会话
+				a.playService.CleanupStaleSessions(24 * time.Hour)
+			}
+		}
+	}
+}
+
 // GetDeviceService 获取设备服务
 func (a *App) GetDeviceService() *service.DeviceService {
 	return a.deviceService
@@ -292,9 +452,19 @@ func (a *App) GetAlarmService() *service.AlarmService {
 	return a.alarmService
 }
 
+// GetDeviceInfoService 获取设备信息查询服务
+func (a *App) GetDeviceInfoService() *service.DeviceInfoService {
+	return a.infoService
+}
+
 // GetSIPServer 获取 SIP 服务
 func (a *App) GetSIPServer() *sip.SIPServer {
 	return a.sipServer
+}
+
+// GetSsrcService 获取 SSRC 管理服务
+func (a *App) GetSsrcService() *service.SsrcService {
+	return a.ssrcService
 }
 
 // IsRunning 检查是否运行中
@@ -309,7 +479,7 @@ func (a *App) Wait() {
 	<-a.ctx.Done()
 }
 
-func buildPlayConfig(rawURL string) service.PlayConfig {
+func buildPlayConfig(rawURL string, localId string, sipListenIP string, sipPort int) service.PlayConfig {
 	host := "127.0.0.1"
 	port := 80
 	parsedURL := rawURL
@@ -331,9 +501,12 @@ func buildPlayConfig(rawURL string) service.PlayConfig {
 		}
 	}
 	return service.PlayConfig{
-		ZLMHost: host,
-		ZLMPort: port,
-		AppName: "rtp",
+		ZLMHost:     host,
+		ZLMPort:     port,
+		AppName:     "rtp",
+		LocalId:     localId, // COMPAT_JAVA: 本地平台 ID
+		SIPListenIP: sipListenIP,
+		SIPPort:     sipPort,
 	}
 }
 

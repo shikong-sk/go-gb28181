@@ -1,32 +1,52 @@
 package service
 
 import (
+	"fmt"
 	"time"
 
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
 	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"gorm.io/gorm"
 )
 
 // DeviceService 设备服务层
 type DeviceService struct {
-	deviceRepo  *repository.DeviceRepository
-	channelRepo *repository.ChannelRepository
+	deviceRepo   *repository.DeviceRepository
+	channelRepo  *repository.ChannelRepository
+	eventService *EventService // 事件发布服务
 }
 
 // NewDeviceService 创建设备服务
-func NewDeviceService(deviceRepo *repository.DeviceRepository, channelRepo *repository.ChannelRepository) *DeviceService {
+func NewDeviceService(deviceRepo *repository.DeviceRepository, channelRepo *repository.ChannelRepository, eventService *EventService) *DeviceService {
 	return &DeviceService{
-		deviceRepo:  deviceRepo,
-		channelRepo: channelRepo,
+		deviceRepo:   deviceRepo,
+		channelRepo:  channelRepo,
+		eventService: eventService,
 	}
 }
 
 // OnDeviceRegister 设备注册事件处理
 func (s *DeviceService) OnDeviceRegister(deviceID, ip string, port int) error {
+	// 设备 ID 格式校验（兼容性处理：警告但不拦截）
+	valid, warnings, err := utils.ValidateDeviceID(deviceID)
+	if len(warnings) > 0 {
+		// 记录警告日志
+		log.Warn().Str("device_id", deviceID).Strs("warnings", warnings).Msg("设备ID格式校验警告")
+	}
+	if err != nil {
+		// 记录解析错误，但不阻止注册
+		log.Warn().Err(err).Str("device_id", deviceID).Msg("设备ID解析失败")
+	}
+	if !valid {
+		// 兼容性：即使校验失败也允许注册（仅记录警告）
+		log.Warn().Str("device_id", deviceID).Msg("设备ID格式非标准，但仍允许注册")
+	}
+
 	// 查询设备是否存在
-	_, err := s.deviceRepo.GetByDeviceID(deviceID)
+	_, err = s.deviceRepo.GetByDeviceID(deviceID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			// 设备不存在，创建新设备
@@ -45,6 +65,11 @@ func (s *DeviceService) OnDeviceRegister(deviceID, ip string, port int) error {
 			}
 
 			log.Info().Str("device_id", deviceID).Str("ip", ip).Int("port", port).Msg("新设备注册成功")
+
+			// 发布设备上线事件
+			if s.eventService != nil {
+				s.eventService.PublishDeviceOnline(deviceID, ip, port)
+			}
 			return nil
 		}
 		return err
@@ -66,6 +91,11 @@ func (s *DeviceService) OnDeviceRegister(deviceID, ip string, port int) error {
 	}
 
 	log.Info().Str("device_id", deviceID).Str("ip", ip).Int("port", port).Msg("设备重新注册成功")
+
+	// 发布设备上线事件
+	if s.eventService != nil {
+		s.eventService.PublishDeviceOnline(deviceID, ip, port)
+	}
 	return nil
 }
 
@@ -106,6 +136,11 @@ func (s *DeviceService) OnDeviceOffline(deviceID string) error {
 	}
 
 	log.Info().Str("device_id", deviceID).Msg("设备离线")
+
+	// 发布设备离线事件
+	if s.eventService != nil {
+		s.eventService.PublishDeviceOffline(deviceID, "unregister")
+	}
 	return nil
 }
 
@@ -211,4 +246,30 @@ func (s *DeviceService) CheckOfflineDevices(timeoutMinutes int) error {
 	}
 
 	return nil
+}
+
+// UpdateDeviceInfo 更新设备信息
+func (s *DeviceService) UpdateDeviceInfo(deviceID string, info *manscdp.DeviceInfoResp) error {
+	device, err := s.deviceRepo.GetByDeviceID(deviceID)
+	if err != nil {
+		return fmt.Errorf("获取设备失败: %w", err)
+	}
+
+	if info.DeviceName != "" {
+		device.Name = info.DeviceName
+	}
+	if info.Manufacturer != "" {
+		device.Manufacturer = info.Manufacturer
+	}
+	if info.Model != "" {
+		device.Model = info.Model
+	}
+	if info.Firmware != "" {
+		device.Firmware = info.Firmware
+	}
+	if info.Channel > 0 {
+		device.ChannelCount = info.Channel
+	}
+
+	return s.deviceRepo.Update(device)
 }

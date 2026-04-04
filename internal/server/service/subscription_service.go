@@ -18,6 +18,8 @@ type Subscription struct {
 	Context   context.Context    // 上下文
 	Cancel    context.CancelFunc // 取消函数
 	CreatedAt time.Time          // 创建时间
+	closed    bool               // 关闭标记
+	mu        sync.Mutex         // 保护 closed 字段
 }
 
 // SubscriptionService 通用的异步响应订阅服务
@@ -90,8 +92,7 @@ func (s *SubscriptionService) Unsubscribe(deviceID, sn string) {
 
 	if value, ok := s.subscriptions.LoadAndDelete(key); ok {
 		sub := value.(*Subscription)
-		sub.Cancel()
-		close(sub.ResultCh)
+		sub.Close()
 		log.Debug().
 			Str("cmd_type", sub.CmdType).
 			Str("device_id", deviceID).
@@ -170,8 +171,7 @@ func (s *SubscriptionService) CleanupExpired() int {
 		// 检查上下文是否已过期
 		if sub.Context.Err() != nil {
 			s.subscriptions.Delete(key)
-			sub.Cancel()
-			close(sub.ResultCh)
+			sub.Close()
 			count++
 			log.Debug().
 				Str("cmd_type", sub.CmdType).
@@ -186,8 +186,7 @@ func (s *SubscriptionService) CleanupExpired() int {
 		maxAge := s.timeout * 3
 		if now.Sub(sub.CreatedAt) > maxAge {
 			s.subscriptions.Delete(key)
-			sub.Cancel()
-			close(sub.ResultCh)
+			sub.Close()
 			count++
 			log.Warn().
 				Str("cmd_type", sub.CmdType).
@@ -220,4 +219,22 @@ func (s *SubscriptionService) Count() int {
 // buildKey 构建订阅的唯一标识 key
 func (s *SubscriptionService) buildKey(deviceID, sn string) string {
 	return deviceID + ":" + sn
+}
+
+// Close 安全关闭订阅，防止重复关闭 channel
+func (s *Subscription) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+	s.closed = true
+
+	if s.Cancel != nil {
+		s.Cancel()
+	}
+	if s.ResultCh != nil {
+		close(s.ResultCh)
+	}
 }

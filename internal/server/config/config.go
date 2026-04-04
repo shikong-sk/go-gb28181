@@ -27,6 +27,9 @@ type Config struct {
 
 	// 报警配置
 	Alarm AlarmConfig `mapstructure:"alarm"`
+
+	// Redis 配置
+	Redis RedisConfig `mapstructure:"redis"`
 }
 
 // SIPConfig SIP 相关配置
@@ -49,6 +52,7 @@ type SIPConfig struct {
 	Enabled       bool `mapstructure:"enabled"`        // 是否启用 SIP 服务
 	RegisterCycle int  `mapstructure:"register_cycle"` // 注册周期(秒)
 	KeepaliveInt  int  `mapstructure:"keepalive_int"`  // 心跳间隔(秒)
+	InviteTimeout int  `mapstructure:"invite_timeout"` // INVITE 超时(秒)
 }
 
 // HTTPConfig HTTP API 配置
@@ -79,6 +83,13 @@ type AlarmConfig struct {
 	RetentionDays int  `mapstructure:"retention_days"` // 保留天数 (0=永久保留)
 }
 
+// RedisConfig Redis 配置
+type RedisConfig struct {
+	Addr     string `mapstructure:"addr"`     // Redis 地址 (host:port)
+	Password string `mapstructure:"password"` // Redis 密码
+	DB       int    `mapstructure:"db"`       // Redis 数据库编号
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -95,6 +106,7 @@ func DefaultConfig() *Config {
 			Enabled:       true,
 			RegisterCycle: 3600,
 			KeepaliveInt:  30,
+			InviteTimeout: 15,
 		},
 		HTTP: HTTPConfig{
 			Enabled: true,
@@ -113,6 +125,11 @@ func DefaultConfig() *Config {
 		Alarm: AlarmConfig{
 			Enabled:       true,
 			RetentionDays: 3,
+		},
+		Redis: RedisConfig{
+			Addr:     "localhost:6379",
+			Password: "",
+			DB:       0,
 		},
 	}
 }
@@ -175,6 +192,7 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("sip.enabled", c.SIP.Enabled)
 	v.SetDefault("sip.register_cycle", c.SIP.RegisterCycle)
 	v.SetDefault("sip.keepalive_int", c.SIP.KeepaliveInt)
+	v.SetDefault("sip.invite_timeout", c.SIP.InviteTimeout)
 
 	v.SetDefault("http.enabled", c.HTTP.Enabled)
 	v.SetDefault("http.host", c.HTTP.Host)
@@ -186,9 +204,14 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("database.max_idle_conns", c.Database.MaxIdleConns)
 
 	v.SetDefault("zlmediakit.url", c.ZLMediaKit.Url)
+	v.SetDefault("zlmediakit.hook_url", c.ZLMediaKit.HookUrl)
 
 	v.SetDefault("alarm.enabled", c.Alarm.Enabled)
 	v.SetDefault("alarm.retention_days", c.Alarm.RetentionDays)
+
+	v.SetDefault("redis.addr", c.Redis.Addr)
+	v.SetDefault("redis.password", c.Redis.Password)
+	v.SetDefault("redis.db", c.Redis.DB)
 }
 
 // generateDefaultConfig 生成默认配置文件
@@ -214,6 +237,9 @@ password = "12345678"                 # 密码
 
 # 注册周期(秒)
 register_cycle = 3600
+
+# INVITE 超时时间(秒)
+invite_timeout = 15
 
 [http]
 # HTTP API 配置
@@ -241,11 +267,18 @@ max_idle_conns = 5                    # 最大空闲连接数
 url = "http://127.0.0.1:80"
 secret = ""
 id = ""
+hook_url = "http://127.0.0.1:8080/index/api/hook"
 
 [alarm]
 # 报警记录配置
 enabled = true              # 是否保存报警记录
 retention_days = 3          # 保留天数 (0=永久保留)
+
+[redis]
+# Redis 配置 (用于 SSRC 池管理)
+addr = "localhost:6379"     # Redis 地址
+password = ""               # Redis 密码
+db = 0                      # Redis 数据库编号
 `
 
 	// 确保目录存在

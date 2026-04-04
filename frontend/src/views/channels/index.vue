@@ -150,13 +150,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { VideoCamera, CircleCheck, CircleClose, Refresh } from '@element-plus/icons-vue'
 import { useChannelStore } from '@/stores/device'
 import type { Channel } from '@/types/device'
 
 const route = useRoute()
+const router = useRouter()
 const channelStore = useChannelStore()
 
 const deviceIdFilter = ref<string>('')
@@ -208,7 +209,14 @@ function handlePageChange(page: number) {
 
 /** 播放通道 */
 function handlePlay(channel: Channel) {
-  ElMessage.info(`播放通道: ${channel.channelId} (功能开发中)`)
+  // 跳转到播放页面，携带设备ID和通道ID参数
+  router.push({
+    path: '/play',
+    query: {
+      deviceId: channel.deviceId,
+      channelId: channel.channelId,
+    },
+  })
 }
 
 /** 删除通道 */

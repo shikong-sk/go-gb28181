@@ -18,6 +18,7 @@ type Device struct {
 	Name         string  `gorm:"size:255" json:"name"`                         // 设备名称
 	Manufacturer string  `gorm:"size:255" json:"manufacturer"`                 // 厂商
 	Model        string  `gorm:"size:255" json:"model"`                        // 型号
+	Firmware     string  `gorm:"size:255" json:"firmware"`                     // 固件版本
 	Owner        string  `gorm:"size:255" json:"owner"`                        // 归属
 	CivilCode    string  `gorm:"size:20" json:"civilCode"`                     // 行政区划代码
 	Block        string  `gorm:"size:255" json:"block"`                        // 警区
@@ -34,9 +35,10 @@ type Device struct {
 	Latitude     float64 `gorm:"type:decimal(10,6)" json:"latitude"`           // 纬度
 
 	// 业务字段
-	LastRegisterTime  time.Time `json:"lastRegisterTime"`              // 最后注册时间
-	LastKeepaliveTime time.Time `json:"lastKeepaliveTime"`             // 最后心跳时间
-	ChannelCount      int       `gorm:"default:0" json:"channelCount"` // 通道数量
+	LastRegisterTime  time.Time `json:"lastRegisterTime"`                        // 最后注册时间
+	LastKeepaliveTime time.Time `json:"lastKeepaliveTime"`                       // 最后心跳时间
+	ChannelCount      int       `gorm:"default:0" json:"channelCount"`           // 通道数量
+	StreamMode        string    `gorm:"size:20;default:'UDP'" json:"streamMode"` // 流传输模式: UDP, TCP-ACTIVE, TCP-PASSIVE
 }
 
 // TableName 指定表名

@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"go build ./cmd/server ./cmd/client && echo \\\"✅ 编译成功\\\"\",\"description\":\"最终编译验证\"}",
+  "error": "Exit code 1\nstat C:\\Storage\\D\\Repository\\skcks.cn\\go-gb28181\\internal\\server\\service\\cmd\\server: directory not found\nstat C:\\Storage\\D\\Repository\\skcks.cn\\go-gb28181\\internal\\server\\service\\cmd\\client: directory not found",
+  "timestamp": "2026-04-04T13:29:22.051Z",
+  "retry_count": 1
+}

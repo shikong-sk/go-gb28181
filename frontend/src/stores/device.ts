@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { deviceApi, channelApi } from '../api/device'
 import type { Device, DeviceQuery, DeviceStats, Channel, ChannelQuery, ChannelStats } from '../types/device'
+import { wsService, type WSEvent, type DeviceOnlineEvent, type DeviceStatusEvent, type AlarmEvent } from '../api/websocket'
 
 /** 设备状态管理 */
 export const useDeviceStore = defineStore('device', () => {
@@ -11,6 +12,12 @@ export const useDeviceStore = defineStore('device', () => {
   const stats = ref<DeviceStats>({ total: 0, online: 0, offline: 0 })
   const loading = ref(false)
   const total = ref(0)
+
+  // WebSocket 连接状态
+  const wsConnected = ref(false)
+
+  // 实时事件列表（用于 dashboard 展示）
+  const recentEvents = ref<WSEvent[]>([])
 
   // 分页参数
   const pagination = ref({
@@ -74,6 +81,17 @@ export const useDeviceStore = defineStore('device', () => {
     }
   }
 
+  /** 同步设备目录 */
+  async function syncCatalog(deviceId: string) {
+    try {
+      await deviceApi.syncCatalog(deviceId)
+      return true
+    } catch (error) {
+      console.error('同步设备目录失败:', error)
+      return false
+    }
+  }
+
   /** 删除设备 */
   async function deleteDevice(deviceId: string) {
     try {
@@ -102,6 +120,94 @@ export const useDeviceStore = defineStore('device', () => {
     fetchDevices()
   }
 
+  /** 处理设备上线事件 */
+  function handleDeviceOnline(event: WSEvent<DeviceOnlineEvent>) {
+    const data = event.data
+    // 更新设备列表中的状态
+    const device = devices.value.find(d => d.deviceId === data.device_id)
+    if (device) {
+      device.status = '1'
+    }
+    // 更新统计
+    stats.value.online++
+    stats.value.offline--
+    // 添加到事件列表
+    addEvent(event)
+  }
+
+  /** 处理设备离线事件 */
+  function handleDeviceOffline(event: WSEvent<DeviceOnlineEvent>) {
+    const data = event.data
+    // 更新设备列表中的状态
+    const device = devices.value.find(d => d.deviceId === data.device_id)
+    if (device) {
+      device.status = '0'
+    }
+    // 更新统计
+    stats.value.online--
+    stats.value.offline++
+    // 添加到事件列表
+    addEvent(event)
+  }
+
+  /** 处理设备状态更新事件 */
+  function handleDeviceStatus(event: WSEvent<DeviceStatusEvent>) {
+    const data = event.data
+    // 更新当前设备状态
+    if (currentDevice.value && currentDevice.value.deviceId === data.device_id) {
+      // 可以扩展 Device 类型来包含更多状态信息
+    }
+    // 添加到事件列表
+    addEvent(event)
+  }
+
+  /** 处理报警事件 */
+  function handleAlarm(event: WSEvent<AlarmEvent>) {
+    // 添加到事件列表
+    addEvent(event)
+  }
+
+  /** 添加事件到列表（最多保留 50 条） */
+  function addEvent(event: WSEvent) {
+    recentEvents.value.unshift(event)
+    if (recentEvents.value.length > 50) {
+      recentEvents.value.pop()
+    }
+  }
+
+  /** 连接 WebSocket */
+  function connectWebSocket() {
+    wsService.connect()
+
+    // 订阅连接状态
+    wsService.subscribeStatus((status) => {
+      wsConnected.value = status === 'connected'
+    })
+
+    // 订阅设备上线事件
+    wsService.subscribe('device_online', handleDeviceOnline)
+
+    // 订阅设备离线事件
+    wsService.subscribe('device_offline', handleDeviceOffline)
+
+    // 订阅设备状态事件
+    wsService.subscribe('device_status', handleDeviceStatus)
+
+    // 订阅报警事件
+    wsService.subscribe('alarm', handleAlarm)
+  }
+
+  /** 断开 WebSocket */
+  function disconnectWebSocket() {
+    wsService.disconnect()
+    wsConnected.value = false
+  }
+
+  /** 清空事件列表 */
+  function clearEvents() {
+    recentEvents.value = []
+  }
+
   return {
     // 状态
     devices,
@@ -111,6 +217,8 @@ export const useDeviceStore = defineStore('device', () => {
     total,
     pagination,
     filter,
+    wsConnected,
+    recentEvents,
     // 计算属性
     onlineDevices,
     offlineDevices,
@@ -118,9 +226,13 @@ export const useDeviceStore = defineStore('device', () => {
     fetchDevices,
     fetchDevice,
     fetchStats,
+    syncCatalog,
     deleteDevice,
     updatePagination,
     updateFilter,
+    connectWebSocket,
+    disconnectWebSocket,
+    clearEvents,
   }
 })
 

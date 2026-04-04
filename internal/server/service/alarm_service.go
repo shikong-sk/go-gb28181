@@ -9,18 +9,20 @@ import (
 
 // AlarmService 报警服务层
 type AlarmService struct {
-	alarmRepo *repository.AlarmRepository
-	config    *config.AlarmConfig
+	alarmRepo    *repository.AlarmRepository
+	config       *config.AlarmConfig
+	eventService *EventService // 事件发布服务
 }
 
 // NewAlarmService 创建报警服务
-func NewAlarmService(alarmRepo *repository.AlarmRepository, cfg *config.AlarmConfig) *AlarmService {
+func NewAlarmService(alarmRepo *repository.AlarmRepository, cfg *config.AlarmConfig, eventService *EventService) *AlarmService {
 	if cfg == nil {
 		cfg = &config.AlarmConfig{Enabled: true, RetentionDays: 3}
 	}
 	return &AlarmService{
-		alarmRepo: alarmRepo,
-		config:    cfg,
+		alarmRepo:    alarmRepo,
+		config:       cfg,
+		eventService: eventService,
 	}
 }
 
@@ -42,6 +44,18 @@ func (s *AlarmService) SaveAlarm(alarm *model.Alarm) error {
 		return err
 	}
 	log.Info().Str("device_id", alarm.DeviceID).Str("priority", alarm.AlarmPriority).Msg("报警已保存")
+
+	// 发布报警事件
+	if s.eventService != nil {
+		s.eventService.PublishAlarm(
+			alarm.DeviceID,
+			alarm.AlarmPriority,
+			alarm.AlarmMethod,
+			alarm.AlarmTime,
+			alarm.AlarmDescription,
+		)
+	}
+
 	return nil
 }
 

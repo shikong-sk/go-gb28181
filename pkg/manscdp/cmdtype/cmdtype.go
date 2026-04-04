@@ -7,6 +7,7 @@ const (
 	DeviceConfig   CmdType = "DeviceConfig"
 	DeviceControl  CmdType = "DeviceControl"
 	DeviceStatus   CmdType = "DeviceStatus"
+	DeviceInfo     CmdType = "DeviceInfo"
 	Catalog        CmdType = "Catalog"
 	Alarm          CmdType = "Alarm"
 	MobilePosition CmdType = "MobilePosition"

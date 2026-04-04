@@ -8,6 +8,11 @@ import './assets/styles/index.css'
 import App from './App.vue'
 import router from './router'
 
+// 导入 flv.js 用于视频播放
+import flvjs from 'flv.js'
+// @ts-expect-error flv.js 挂载到 window
+window.flvjs = flvjs
+
 const app = createApp(App)
 
 app.use(createPinia())

@@ -13,13 +13,18 @@ import (
 
 // DeviceHandler 设备 HTTP 处理器
 type DeviceHandler struct {
-	repo           *repository.DeviceRepository
-	catalogService *service.CatalogService
+	repo                       *repository.DeviceRepository
+	catalogService             *service.CatalogService
+	catalogSubscriptionService *service.CatalogSubscriptionService
 }
 
 // NewDeviceHandler 创建设备处理器
-func NewDeviceHandler(repo *repository.DeviceRepository, catalogService *service.CatalogService) *DeviceHandler {
-	return &DeviceHandler{repo: repo, catalogService: catalogService}
+func NewDeviceHandler(repo *repository.DeviceRepository, catalogService *service.CatalogService, catalogSubscriptionService *service.CatalogSubscriptionService) *DeviceHandler {
+	return &DeviceHandler{
+		repo:                       repo,
+		catalogService:             catalogService,
+		catalogSubscriptionService: catalogSubscriptionService,
+	}
 }
 
 // ListDevicesRequest 设备列表请求

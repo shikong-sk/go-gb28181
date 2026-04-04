@@ -28,9 +28,11 @@ type SIPServer struct {
 	recordService *service.RecordService
 
 	// 新增服务
-	subscriptionService *service.SubscriptionService
-	positionService     *service.PositionService
-	playService         *service.PlayService
+	subscriptionService        *service.SubscriptionService
+	catalogSubscriptionService *service.CatalogSubscriptionService
+	alarmSubscriptionService   *service.AlarmSubscriptionService // 报警订阅服务
+	positionService            *service.PositionService
+	playService                *service.PlayService
 
 	ua         *sipgo.UserAgent
 	client     *sipgo.Client
@@ -65,9 +67,19 @@ func (s *SIPServer) SetPositionService(positionService *service.PositionService)
 	s.positionService = positionService
 }
 
+// SetCatalogSubscriptionService 设置目录订阅服务
+func (s *SIPServer) SetCatalogSubscriptionService(catalogSubscriptionService *service.CatalogSubscriptionService) {
+	s.catalogSubscriptionService = catalogSubscriptionService
+}
+
 // SetPlayService 设置播放服务
 func (s *SIPServer) SetPlayService(playService *service.PlayService) {
 	s.playService = playService
+}
+
+// SetAlarmSubscriptionService 设置报警订阅服务
+func (s *SIPServer) SetAlarmSubscriptionService(alarmSubscriptionService *service.AlarmSubscriptionService) {
+	s.alarmSubscriptionService = alarmSubscriptionService
 }
 
 // Start 启动 SIP 服务
@@ -161,6 +173,9 @@ func (s *SIPServer) setupHandlers() {
 	s.server.OnRegister(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleRegister(req, tx)
 	})
+
+	// 注意：sipgo 会为未处理的响应打印 info 级别日志
+	// 这是正常现象，表示设备重传了 200 OK 响应，但事务已完成
 }
 
 // handleMessage 处理 SIP MESSAGE
@@ -207,6 +222,8 @@ func (s *SIPServer) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleMobilePositionMessage(req, bodyUTF8)
 	case "MediaStatus":
 		s.handleMediaStatusMessage(req, bodyUTF8)
+	case "DeviceInfo":
+		s.handleDeviceInfoMessage(req, bodyUTF8)
 	default:
 		log.Warn().Str("cmd_type", header.CmdType).Str("xml_name", header.XMLName.Local).Msg("未处理的 MANSCDP 消息类型")
 	}
@@ -227,6 +244,18 @@ func (s *SIPServer) handleCatalogMessage(req *sip.Request, body []byte) {
 		// 这是 Catalog 响应
 		log.Info().Str("device_id", resp.DeviceID).Str("sum_num", resp.SumNum).Msg("收到目录响应")
 		s.processCatalogResponse(resp)
+		return
+	}
+
+	// 尝试解析为 Notify（目录订阅通知）
+	notify := new(manscdp.CatalogNotify)
+	if err := utils.XMLUnmarshal(body, notify); err == nil && notify.SumNum != "" {
+		log.Info().Str("device_id", notify.DeviceID).Str("sn", notify.SN).Str("sum_num", notify.SumNum).Msg("收到目录订阅通知")
+		if s.catalogSubscriptionService != nil {
+			if err := s.catalogSubscriptionService.HandleNotify(notify); err != nil {
+				log.Error().Err(err).Str("device_id", notify.DeviceID).Msg("处理目录订阅通知失败")
+			}
+		}
 		return
 	}
 
@@ -315,7 +344,15 @@ func (s *SIPServer) handleAlarmMessage(req *sip.Request, body []byte) {
 		Str("alarm_description", alarm.AlarmDescription).
 		Msg("收到报警通知")
 
-	// 保存报警信息到数据库
+	// 优先使用报警订阅服务处理（支持订阅和去重）
+	if s.alarmSubscriptionService != nil {
+		if err := s.alarmSubscriptionService.HandleAlarmNotify(alarm); err != nil {
+			log.Error().Err(err).Str("device_id", alarm.DeviceID).Msg("报警订阅服务处理失败")
+		}
+		return
+	}
+
+	// 兜底：直接保存报警信息到数据库（无订阅场景）
 	if s.alarmService != nil {
 		alarmRecord := &model.Alarm{
 			DeviceID:         alarm.DeviceID,
@@ -378,6 +415,35 @@ func (s *SIPServer) handleDeviceStatusMessage(req *sip.Request, body []byte) {
 	if s.deviceService != nil {
 		// TODO: 实现设备状态更新逻辑
 		log.Debug().Str("device_id", resp.DeviceID).Msg("设备状态响应已处理")
+	}
+}
+
+// handleDeviceInfoMessage 处理 DeviceInfo 消息
+func (s *SIPServer) handleDeviceInfoMessage(req *sip.Request, body []byte) {
+	var resp manscdp.DeviceInfoResp
+	err := utils.XMLUnmarshal([]byte(body), &resp)
+	if err != nil {
+		log.Error().Err(err).Msg("解析 DeviceInfo 响应失败")
+		return
+	}
+
+	log.Info().
+		Str("device_id", resp.DeviceID).
+		Str("manufacturer", resp.Manufacturer).
+		Str("model", resp.Model).
+		Msg("收到设备信息响应")
+
+	// 通知订阅服务
+	if s.subscriptionService != nil {
+		s.subscriptionService.NotifyResponse(resp.DeviceID, resp.SN, &resp)
+	}
+
+	// 更新数据库
+	if s.deviceService != nil {
+		err := s.deviceService.UpdateDeviceInfo(resp.DeviceID, &resp)
+		if err != nil {
+			log.Error().Err(err).Str("device_id", resp.DeviceID).Msg("更新设备信息失败")
+		}
 	}
 }
 
@@ -546,6 +612,22 @@ func (s *SIPServer) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	log.Info().Str("device_id", deviceID).Msg("Digest 认证成功")
+
+	// 设备 ID 格式校验（兼容性处理：警告但不拦截）
+	// COMPAT_JAVA: 参考 Java GB28181 实现的兼容性处理方式
+	valid, warnings, validateErr := utils.ValidateDeviceID(deviceID)
+	if len(warnings) > 0 {
+		// 记录警告日志
+		log.Warn().Str("device_id", deviceID).Strs("warnings", warnings).Msg("设备ID格式校验警告")
+	}
+	if validateErr != nil {
+		// 记录解析错误，但不阻止注册（兼容性）
+		log.Warn().Err(validateErr).Str("device_id", deviceID).Msg("设备ID解析失败")
+	}
+	if !valid {
+		// 兼容性：即使校验失败也允许注册（仅记录警告）
+		log.Warn().Str("device_id", deviceID).Msg("设备ID格式非标准，但仍允许注册")
+	}
 
 	// 保存设备信息到数据库
 	if s.deviceService != nil {

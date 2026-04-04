@@ -20,6 +20,17 @@ type CloseRtpServerResp struct {
 	Hit  int `json:"hit"`
 }
 
+type ConnectRtpServerReq struct {
+	StreamId string `json:"stream_id"`
+	DstUrl   string `json:"dst_url"`
+	DstPort  int    `json:"dst_port"`
+}
+
+type ConnectRtpServerResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+}
+
 type StartSendRtpReq struct {
 	Vhost     string `json:"vhost"`
 	App       string `json:"app"`
@@ -63,3 +74,11 @@ type RtpServer struct {
 }
 
 type ListRtpServerResp = Data[[]RtpServer]
+
+// RtpInfoResp RTP 流信息响应
+type RtpInfoResp struct {
+	Code  int    `json:"code"`
+	Exist bool   `json:"exist"` // 流是否存在
+	IP    string `json:"ip"`    // 推流 IP
+	Port  int    `json:"port"`  // 推流端口
+}
