@@ -11,9 +11,18 @@ type HookRequest struct {
 }
 
 // StreamChangedRequest 流状态变化请求
+// 注意：ZLM 文档中字段名是 "regist" 不是 "register"
 type StreamChangedRequest struct {
 	HookRequest
-	Register bool `json:"register"` // true=注册(流创建), false=注销(流销毁)
+	Regist           bool   `json:"regist"`           // true=注册(流创建), false=注销(流销毁)
+	AliveSecond      int    `json:"aliveSecond"`      // 存活时间，单位秒（注册时提供）
+	BytesSpeed       int    `json:"bytesSpeed"`       // 数据产生速度，单位byte/s（注册时提供）
+	CreateStamp      int    `json:"createStamp"`      // GMT unix系统时间戳，单位秒（注册时提供）
+	OriginType       int    `json:"originType"`       // 产生源类型（注册时提供）
+	OriginTypeStr    string `json:"originTypeStr"`    // 产生源类型名称（注册时提供）
+	OriginUrl        string `json:"originUrl"`        // 产生源的url（注册时提供）
+	ReaderCount      int    `json:"readerCount"`      // 本协议观看人数（注册时提供）
+	TotalReaderCount int    `json:"totalReaderCount"` // 观看总人数（注册时提供）
 }
 
 // StreamNoneReaderRequest 无观看者请求

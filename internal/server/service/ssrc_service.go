@@ -18,10 +18,11 @@ type SsrcService struct {
 // NewSsrcService 创建 SSRC 服务并初始化 SSRC 池
 func NewSsrcService(redisClient *redis.Client, domain string) *SsrcService {
 	// 提取域编码第3-7位作为 SSRC 前缀（共5位）
-	// 例如：34020000002000000001 -> 20000
+	// COMPAT_WVP: WVP 从域编码提取 SSRC 前缀（如 44050100002000000002 → 50100）
+	// 例如：44050100002000000002 -> 50100 (domain[3:8])
 	if len(domain) < 8 {
 		log.Warn().Str("domain", domain).Msg("域编码长度不足，使用默认前缀")
-		domain = "34020000002000000001" // 使用默认值
+		domain = "44050100002000000002" // 使用默认值
 	}
 
 	ssrcPrefix := domain[3:8] // 第3-7位（索引3-7），共5位

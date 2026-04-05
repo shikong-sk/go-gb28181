@@ -4,7 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,30 +28,43 @@ func init() {
 func main() {
 	flag.Parse()
 
-	// 加载配置
 	cfg, err := config.ReadConfig()
 	if err != nil {
 		fmt.Printf("加载配置失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 初始化日志
+	if cfg.HTTP.Daemonize && os.Getenv("GB28181_DAEMONIZED") != "1" {
+		if err := relaunchInBackground(); err != nil {
+			fmt.Printf("后台启动失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("GB28181 服务已切换到后台运行")
+		return
+	}
+
 	logger := log.InitLogger(cfg.Debug)
 	log.SetLogger(&logger)
 
-	// 设置 zerolog 全局时间格式
+	logFile, err := log.SetupFileLogging(cfg.HTTP.LogFile)
+	if err != nil {
+		fmt.Printf("配置日志文件失败: %v\n", err)
+		os.Exit(1)
+	}
+	if logFile != nil {
+		defer func() {
+			_ = logFile.Close()
+		}()
+		log.Info().Str("log_file", cfg.HTTP.LogFile).Msg("已启用日志文件输出")
+	}
+
 	zerolog.TimeFieldFormat = time.RFC3339
 
-	// 创建应用
 	application := app.NewApp(cfg)
-
-	// 初始化应用
 	if err := application.Init(); err != nil {
 		log.Fatal().Err(err).Msg("初始化应用失败")
 		return
 	}
-
-	// 启动应用
 	if err := application.Start(); err != nil {
 		log.Fatal().Err(err).Msg("启动应用失败")
 		return
@@ -57,13 +73,32 @@ func main() {
 	log.Info().Msg("GB28181 服务启动完成")
 	log.Info().Msg("按 Ctrl+C 停止服务")
 
-	// 等待退出信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// 停止应用
 	application.Stop()
-
 	log.Info().Msg("服务已退出")
+}
+
+func relaunchInBackground() error {
+	execPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	args := make([]string, 0, len(os.Args)-1)
+	for _, arg := range os.Args[1:] {
+		if strings.TrimSpace(arg) == "" {
+			continue
+		}
+		args = append(args, arg)
+	}
+
+	cmd := exec.Command(execPath, args...)
+	cmd.Env = append(os.Environ(), "GB28181_DAEMONIZED=1")
+	cmd.Dir = filepath.Dir(execPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Start()
 }

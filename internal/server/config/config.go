@@ -57,9 +57,11 @@ type SIPConfig struct {
 
 // HTTPConfig HTTP API 配置
 type HTTPConfig struct {
-	Enabled bool   `mapstructure:"enabled"` // 是否启用 HTTP API
-	Host    string `mapstructure:"host"`    // 监听地址
-	Port    int    `mapstructure:"port"`    // 监听端口
+	Enabled   bool   `mapstructure:"enabled"`   // 是否启用 HTTP API
+	Host      string `mapstructure:"host"`      // 监听地址
+	Port      int    `mapstructure:"port"`      // 监听端口
+	LogFile   string `mapstructure:"log_file"`  // 日志文件路径（为空则仅输出到标准输出）
+	Daemonize bool   `mapstructure:"daemonize"` // 是否在进程内自动切换为后台运行模式
 }
 
 // DatabaseConfig 数据库配置
@@ -109,9 +111,11 @@ func DefaultConfig() *Config {
 			InviteTimeout: 15,
 		},
 		HTTP: HTTPConfig{
-			Enabled: true,
-			Host:    "0.0.0.0",
-			Port:    8080,
+			Enabled:   true,
+			Host:      "0.0.0.0",
+			Port:      8080,
+			LogFile:   "logs/server.log",
+			Daemonize: false,
 		},
 		Database: DatabaseConfig{
 			Type:         "sqlite",
@@ -197,6 +201,8 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("http.enabled", c.HTTP.Enabled)
 	v.SetDefault("http.host", c.HTTP.Host)
 	v.SetDefault("http.port", c.HTTP.Port)
+	v.SetDefault("http.log_file", c.HTTP.LogFile)
+	v.SetDefault("http.daemonize", c.HTTP.Daemonize)
 
 	v.SetDefault("database.type", c.Database.Type)
 	v.SetDefault("database.name", c.Database.Name)
@@ -246,6 +252,8 @@ invite_timeout = 15
 enabled = true                        # 是否启用 HTTP API
 host = "0.0.0.0"                      # 监听地址
 port = 8080                           # 监听端口
+log_file = "logs/server.log"          # 日志文件路径（为空则仅输出到控制台）
+daemonize = false                     # 是否自动切换为后台运行模式
 
 [database]
 # 数据库配置

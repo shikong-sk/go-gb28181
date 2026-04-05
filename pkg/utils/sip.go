@@ -48,3 +48,9 @@ func GenerateSN() string {
 	n, _ := rand.Int(rand.Reader, big.NewInt(999999))
 	return fmt.Sprintf("%06d", n.Int64()+1)
 }
+
+// GenerateCallID 生成 SIP Call-ID（WVP 兼容格式）
+// 格式: 32位随机字符串（用于 @ 前缀）
+func GenerateCallID() string {
+	return GenerateNanoId(32)
+}

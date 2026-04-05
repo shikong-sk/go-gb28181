@@ -1,9 +1,10 @@
 package types
 
 type OpenRtpServerReq struct {
-	Port     int    `json:"port"`
-	TcpMode  int    `json:"tcp_mode"`
-	StreamId string `json:"stream_id"`
+	Port      int    `json:"port"`
+	TcpMode   int    `json:"tcp_mode"`
+	StreamId  string `json:"stream_id"`
+	SsrcCheck bool   `json:"ssrc_check"` // 是否校验 SSRC，WVP 设置为 false
 }
 
 type OpenRtpServerResp struct {

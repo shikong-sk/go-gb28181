@@ -240,8 +240,8 @@ func (h *KeepaliveHandler) sendKeepalive() {
 
 	log.Debug().Msg("心跳发送成功")
 
-	// 更新心跳时间
-	_ = h.deviceService.OnDeviceKeepalive(h.config.SIP.DeviceID)
+	// 更新心跳时间（客户端模式，不更新地址）
+	_ = h.deviceService.OnDeviceKeepalive(h.config.SIP.DeviceID, "", 0)
 }
 
 // CatalogHandler 目录处理器

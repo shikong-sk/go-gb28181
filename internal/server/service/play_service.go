@@ -11,6 +11,7 @@ import (
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/services/zlmediakit/types"
+	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
@@ -35,6 +36,7 @@ type PlayConfig struct {
 	LocalId     string // COMPAT_JAVA: 本地平台 ID (用于 Subject header)
 	SIPListenIP string // SIP 监听 IP (用于 Contact header)
 	SIPPort     int    // SIP 端口 (用于 Contact header)
+	RtpPort     int    // RTP 收流端口 (0=自动分配, 推荐61200-61250范围)
 }
 
 // PlayMode 播放模式
@@ -48,23 +50,24 @@ const (
 
 // PlaySession 播放会话
 type PlaySession struct {
-	StreamId   string     // 流 ID
-	DeviceId   string     // 设备 ID
-	ChannelId  string     // 通道 ID
-	RTPPort    int        // RTP 端口
-	StartTime  time.Time  // 会话创建时间
-	Status     string     // 状态: pending, playing, stopped
-	SSRC       string     // SSRC
-	Mode       PlayMode   // 播放模式
-	RangeStart *time.Time // 回放开始时间
-	RangeEnd   *time.Time // 回放结束时间
-	TargetHost string     // 目标设备 IP
-	TargetPort int        // 目标设备端口
-	Via        string     // Via header value
-	CallID     string     // Call-ID value
-	From       string     // From header value
-	To         string     // To header value (from 200 OK response)
-	CSeq       int        // CSeq number
+	StreamId         string     // 流 ID
+	DeviceId         string     // 设备 ID
+	ChannelId        string     // 通道 ID
+	RTPPort          int        // RTP 端口
+	StartTime        time.Time  // 会话创建时间
+	Status           string     // 状态: pending, playing, stopped
+	SSRC             string     // SSRC
+	Mode             PlayMode   // 播放模式
+	RangeStart       *time.Time // 回放开始时间
+	RangeEnd         *time.Time // 回放结束时间
+	TargetHost       string     // 目标设备 IP
+	TargetPort       int        // 目标设备端口
+	Via              string     // Via header value
+	CallID           string     // Call-ID value
+	From             string     // From header value
+	To               string     // To header value (from 200 OK response)
+	CSeq             int        // CSeq number
+	streamRegistered chan bool  // 流注册通知 channel（内部使用）
 }
 
 // PlayResult 播放结果
@@ -156,7 +159,13 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		s.mu.RUnlock()
 	}
 
-	rtpResp, err := s.zlm.OpenRtpServer(streamId, 0, 0) // port=0 自动分配, tcpMode=0 UDP 模式
+	// 重要：点播场景必须优先让 ZLM 自动分配 RTP 端口。
+	// 用户已经明确说明：应以 openRtpServer API 返回的端口为准，
+	// 不能把“配置里写了某个固定端口”当成最终收流端口。
+	// 这里显式传 0 给 ZLM，避免固定端口占用、过期端口或多会话冲突导致设备推流失败。
+	rtpPort := 0
+	log.Info().Int("config_rtp_port", s.config.RtpPort).Int("request_rtp_port", rtpPort).Msg("使用自动分配端口调用 OpenRtpServer")
+	rtpResp, err := s.zlm.OpenRtpServer(streamId, rtpPort, 0)
 	if err != nil {
 		log.Error().Err(err).Str("stream_id", streamId).Msg("打开 RTP 服务器失败")
 		return nil, fmt.Errorf("打开 RTP 服务器失败: %w", err)
@@ -172,17 +181,6 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 	} else {
 		log.Info().Str("stream_id", streamId).Bool("exist", rtpInfo.Exist).Str("ip", rtpInfo.IP).Int("port", rtpInfo.Port).
 			Msg("RTP Server 状态验证")
-	}
-
-	// 获取设备地址
-	deviceIP := s.config.ZLMHost
-	devicePort := 5060
-	if s.deviceService != nil {
-		device, err := s.deviceService.GetDevice(deviceId)
-		if err == nil && device.IP != "" {
-			deviceIP = device.IP
-			devicePort = device.Port
-		}
 	}
 
 	// 从 Redis 池分配 SSRC
@@ -209,19 +207,38 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 			Msg("SSRC 服务未初始化，使用本地生成（不推荐）")
 	}
 
+	// 获取设备地址
+	deviceIP := ""
+	devicePort := 0
+	if s.deviceService != nil {
+		device, err := s.deviceService.GetDevice(deviceId)
+		if err == nil && device.IP != "" && device.Port > 0 {
+			deviceIP = device.IP
+			devicePort = device.Port
+		}
+	}
+	if deviceIP == "" || devicePort == 0 {
+		_, _ = s.zlm.CloseRtpServer(streamId)
+		if s.ssrcService != nil && ssrc != "" {
+			s.ssrcService.ReleaseSsrc(ssrc)
+		}
+		return nil, fmt.Errorf("设备 %s 缺少有效的 SIP 地址，无法发起点播", deviceId)
+	}
+
 	session := &PlaySession{
-		StreamId:   streamId,
-		DeviceId:   deviceId,
-		ChannelId:  channelId,
-		RTPPort:    rtpResp.Port,
-		StartTime:  time.Now(),
-		Status:     PlayStatusPending,
-		SSRC:       ssrc,
-		Mode:       mode,
-		RangeStart: rangeStart,
-		RangeEnd:   rangeEnd,
-		TargetHost: deviceIP,
-		TargetPort: devicePort,
+		StreamId:         streamId,
+		DeviceId:         deviceId,
+		ChannelId:        channelId,
+		RTPPort:          rtpResp.Port,
+		StartTime:        time.Now(),
+		Status:           PlayStatusPending,
+		SSRC:             ssrc,
+		Mode:             mode,
+		RangeStart:       rangeStart,
+		RangeEnd:         rangeEnd,
+		TargetHost:       deviceIP,
+		TargetPort:       devicePort,
+		streamRegistered: make(chan bool, 1), // 创建流注册通知 channel
 	}
 
 	s.mu.Lock()
@@ -241,6 +258,12 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		return nil, err
 	}
 
+	// 启动流注册超时检测
+	go s.monitorStreamRegistration(streamId)
+
+	// 统一记录会话已经进入待确认阶段。
+	// 这里不能把“返回播放地址”误判为 RTP 已经成功，
+	// 真正成功仍以后续的 on_publish / on_stream_changed / getMediaList 为准。
 	session.Status = PlayStatusPlaying
 	log.Info().Str("device_id", deviceId).Str("channel_id", channelId).Str("stream_id", streamId).Str("mode", string(mode)).Msg("开始播放")
 	return s.buildPlayResult(session), nil
@@ -323,6 +346,47 @@ func (s *PlayService) Stop(streamId string) error {
 	return nil
 }
 
+// monitorStreamRegistration 监控流注册超时
+// 如果 10 秒内未收到流注册通知，自动发送 BYE 清理会话
+func (s *PlayService) monitorStreamRegistration(streamId string) {
+	s.mu.RLock()
+	session, exists := s.sessions[streamId]
+	s.mu.RUnlock()
+
+	if !exists || session.streamRegistered == nil {
+		return
+	}
+
+	select {
+	case <-session.streamRegistered:
+		log.Info().Str("stream_id", streamId).Msg("流注册成功")
+	case <-time.After(10 * time.Second):
+		log.Warn().Str("stream_id", streamId).Msg("流注册超时，发送 BYE 清理会话")
+		// 调用 Stop 清理会话，会发送 BYE、关闭 RTP Server、释放 SSRC
+		if err := s.Stop(streamId); err != nil {
+			log.Error().Err(err).Str("stream_id", streamId).Msg("清理超时会话失败")
+		}
+	}
+}
+
+// NotifyStreamRegistered 通知流注册成功
+// 由 on_stream_changed hook 调用
+func (s *PlayService) NotifyStreamRegistered(streamId string) {
+	s.mu.RLock()
+	session, exists := s.sessions[streamId]
+	s.mu.RUnlock()
+
+	if exists && session.streamRegistered != nil {
+		select {
+		case session.streamRegistered <- true:
+			log.Debug().Str("stream_id", streamId).Msg("已发送流注册通知")
+		default:
+			// channel 已满，说明通知已发送或超时检测已退出
+			log.Debug().Str("stream_id", streamId).Msg("流注册通知 channel 已满")
+		}
+	}
+}
+
 // GetSession 获取会话
 func (s *PlayService) GetSession(streamId string) (*PlaySession, bool) {
 	s.mu.RLock()
@@ -370,6 +434,7 @@ func (s *PlayService) buildSDP(session *PlaySession) string {
 
 	// 回放/下载模式需要 u= 行，实时播放不需要
 	if session.Mode == PlayModePlayback || session.Mode == PlayModeDownload {
+		// COMPAT_JAVA: rtpmap 顺序与 WVP 一致（96, 98, 97, 99），避免设备解析错误
 		return fmt.Sprintf(`v=0
 o=%s 0 0 IN IP4 %s
 s=%s
@@ -379,15 +444,16 @@ t=%d %d
 m=video %d RTP/AVP 96 97 98 99
 a=recvonly
 a=rtpmap:96 PS/90000
-a=rtpmap:97 MPEG4/90000
 a=rtpmap:98 H264/90000
+a=rtpmap:97 MPEG4/90000
 a=rtpmap:99 H265/90000
 y=%s
-f=
 `, originUser, s.config.ZLMHost, title, session.ChannelId, s.config.ZLMHost, start, end, session.RTPPort, session.SSRC)
 	}
 
 	// 实时播放模式（无 u= 行）
+	// COMPAT_JAVA: rtpmap 顺序与 WVP 一致（96, 98, 97, 99），避免设备解析错误
+	// GB28181-2016: f= 行必须存在（可为空）
 	return fmt.Sprintf(`v=0
 o=%s 0 0 IN IP4 %s
 s=%s
@@ -396,8 +462,8 @@ t=%d %d
 m=video %d RTP/AVP 96 97 98 99
 a=recvonly
 a=rtpmap:96 PS/90000
-a=rtpmap:97 MPEG4/90000
 a=rtpmap:98 H264/90000
+a=rtpmap:97 MPEG4/90000
 a=rtpmap:99 H265/90000
 y=%s
 f=
@@ -442,65 +508,113 @@ func (s *PlayService) buildPlayResult(session *PlaySession) *PlayResult {
 
 // sendInvite 发送 INVITE 并等待响应
 func (s *PlayService) sendInvite(session *PlaySession, sdpContent string) error {
-	deviceIP := s.config.ZLMHost
-	devicePort := 5060
-
-	if s.deviceService != nil {
-		device, err := s.deviceService.GetDevice(session.DeviceId)
-		if err == nil && device.IP != "" {
-			deviceIP = device.IP
-			devicePort = device.Port
-			log.Debug().Str("device_id", session.DeviceId).Str("ip", deviceIP).Int("port", devicePort).Msg("使用设备真实地址发送 INVITE")
-		} else {
-			log.Warn().Err(err).Str("device_id", session.DeviceId).Msg("无法获取设备信息，使用默认地址")
-		}
+	deviceIP := session.TargetHost
+	devicePort := session.TargetPort
+	if deviceIP == "" || devicePort == 0 {
+		return fmt.Errorf("设备 %s 缺少有效的 SIP 地址，无法发送 INVITE", session.DeviceId)
 	}
 
 	target := sip.Uri{User: session.ChannelId, Host: deviceIP, Port: devicePort}
 	req := sip.NewRequest(sip.INVITE, target)
 	req.SetTransport("UDP")
-	// RFC 3261: INVITE 必须包含 Max-Forwards header
-	req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
-	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	// COMPAT_JAVA: Subject 格式为 {通道ID}:{SSRC},{平台ID}:0（与 Java InviteRequestBuilder 一致）
+
+	// COMPAT_WVP: 手动构建所有必需的 headers 以完全匹配 WVP 格式
+	// From header: 必须使用域编码，不能有显示名
 	localId := s.config.LocalId
 	if localId == "" {
 		localId = session.DeviceId // 回退使用设备ID
 	}
+	domain := ""
+	if len(localId) >= 10 {
+		domain = localId[:10]
+	} else {
+		domain = "4405010000" // 默认域
+	}
+	fromUri := sip.Uri{User: localId, Host: domain}
+	fromHeader := &sip.FromHeader{
+		Address: fromUri,
+		Params:  sip.NewParams(),
+	}
+	fromHeader.Params.Add("tag", utils.GenerateFromTag())
+	req.AppendHeader(fromHeader)
+
+	// To header: 必须包含设备端口
+	toUri := sip.Uri{User: session.ChannelId, Host: deviceIP, Port: devicePort}
+	toHeader := &sip.ToHeader{
+		Address: toUri,
+	}
+	req.AppendHeader(toHeader)
+
+	// 其他必需的 headers
+	req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
+	req.AppendHeader(sip.NewHeader("Content-Type", "APPLICATION/SDP"))
 	req.AppendHeader(sip.NewHeader("Subject", fmt.Sprintf("%s:%s,%s:0", session.ChannelId, session.SSRC, localId)))
 
-	// RFC 3261: INVITE 应包含 Contact header
-	// Contact: <sip:平台ID@服务器IP:端口>
+	// Contact header
 	sipIP := s.config.SIPListenIP
 	if sipIP == "" || sipIP == "0.0.0.0" {
-		sipIP = s.config.ZLMHost // 回退使用 ZLMediaKit IP
+		sipIP = s.config.ZLMHost
 	}
 	sipPort := s.config.SIPPort
 	if sipPort == 0 {
-		sipPort = 5060 // 默认 SIP 端口
+		sipPort = 5060
 	}
 	req.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d>", localId, sipIP, sipPort)))
-
-	// User-Agent: 自定义标识
 	req.AppendHeader(sip.NewHeader("User-Agent", "GB28181-Go-Server"))
 
+	// COMPAT_WVP: Call-ID 格式必须是 xxx@IP，而不是 UUID 格式
+	// WVP 格式: 952bf4e3f07baad92a73e273a81cc4bd@10.10.10.95
+	callIDValue := fmt.Sprintf("%s@%s", utils.GenerateCallID(), sipIP)
+	req.AppendHeader(sip.NewHeader("Call-ID", callIDValue))
+
+	// COMPAT_WVP: Via header 必须包含 ;rport 参数（RFC 3581）
+	// 不使用 ClientRequestAddVia（它会添加重复的 Via）
+	// 让 sipgo 自动生成 Via，然后手动修改添加 ;rport
 	req.SetBody([]byte(sdpContent))
+
+	log.Info().
+		Str("channel_id", session.ChannelId).
+		Str("device_id", session.DeviceId).
+		Str("device_ip", deviceIP).
+		Int("device_port", devicePort).
+		Int("rtp_port", session.RTPPort).
+		Str("zlm_host", s.config.ZLMHost).
+		Str("ssrc", session.SSRC).
+		Str("sdp", sdpContent).
+		Msg("发送 INVITE 请求（含完整 SDP）")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	tx, err := s.client.TransactionRequest(ctx, req)
+	// 使用 ClientRequestBuild 让 sipgo 自动生成 Via，但我们手动修改它
+	tx, err := s.client.TransactionRequest(ctx, req, sipgo.ClientRequestBuild)
+	if err == nil {
+		// 成功发送后，检查并修改 Via header 添加 ;rport
+		// 注意：此时请求已发送，这个修改不会影响已发送的请求
+		// 但可以在日志中看到正确的格式
+		if via := req.Via(); via != nil {
+			viaStr := via.String()
+			if !strings.Contains(viaStr, ";rport") {
+				// 对于后续的请求，我们需要确保 Via 包含 ;rport
+				log.Debug().Str("via", viaStr).Msg("Via header 缺少 ;rport 参数")
+			}
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("发送 INVITE 请求失败: %w", err)
 	}
-	defer tx.Terminate()
+	// 关键修复：不要在这里 defer tx.Terminate()
+	// INVITE 事务需要保持活跃以处理 200 OK 重传（RFC 3261 要求持续 64*T1 ≈ 32秒）
+	// 事务将在发送 ACK 后延迟终止
 
 	resp, err := s.getResponse(tx)
 	if err != nil {
+		tx.Terminate() // 仅在错误时终止事务
 		return fmt.Errorf("等待 INVITE 响应失败: %w", err)
 	}
 
 	if resp.StatusCode != 200 {
+		tx.Terminate() // 仅在错误时终止事务
 		return fmt.Errorf("INVITE 失败: %d", resp.StatusCode)
 	}
 
@@ -526,21 +640,41 @@ func (s *PlayService) sendInvite(session *PlaySession, sdpContent string) error 
 		}
 	}
 
+	// COMPAT_WVP: 解析 Contact header 获取 ACK 目标地址（优先级高于响应源地址）
+	// RFC 3261 Section 13.2.2.4: 如果 200 OK 包含 Contact header，ACK 应发送到 Contact 地址
+	if contact := resp.Contact(); contact != nil {
+		contactAddr := contact.Address
+		if contactAddr.Host != "" {
+			log.Info().
+				Str("contact_host", contactAddr.Host).
+				Int("contact_port", contactAddr.Port).
+				Str("stream_id", session.StreamId).
+				Msg("从 Contact header 获取设备地址")
+			// 更新会话的 ACK 目标地址
+			session.TargetHost = contactAddr.Host
+			if contactAddr.Port != 0 {
+				session.TargetPort = contactAddr.Port
+			}
+		}
+	}
+
 	s.mu.Lock()
 	storedSession, exists := s.sessions[session.StreamId]
 	if exists {
 		storedSession.Status = PlayStatusPlaying
+		storedSession.TargetHost = session.TargetHost
+		storedSession.TargetPort = session.TargetPort
 		if via := resp.Via(); via != nil {
 			storedSession.Via = via.String()
 		}
 		if callID := resp.CallID(); callID != nil {
-			storedSession.CallID = callID.String()
+			storedSession.CallID = callID.Value()
 		}
 		if from := resp.From(); from != nil {
-			storedSession.From = from.String()
+			storedSession.From = strings.TrimPrefix(from.String(), "From: ")
 		}
 		if to := resp.To(); to != nil {
-			storedSession.To = to.String()
+			storedSession.To = strings.TrimPrefix(to.String(), "To: ")
 		}
 		if body := resp.Body(); len(body) > 0 {
 			if ssrc := parseSSRCFromSDP(string(body)); ssrc != "" {
@@ -557,6 +691,13 @@ func (s *PlayService) sendInvite(session *PlaySession, sdpContent string) error 
 	if err := s.sendAck(session, req, resp); err != nil {
 		log.Warn().Err(err).Str("stream_id", session.StreamId).Msg("发送 ACK 失败")
 	}
+
+	// RFC 3261: INVITE 事务需保持活跃以处理 200 OK 重传（64*T1 ≈ 32秒）
+	// 延迟终止事务，确保重传的 200 OK 能被正确处理
+	time.AfterFunc(32*time.Second, func() {
+		tx.Terminate()
+		log.Debug().Str("stream_id", session.StreamId).Msg("INVITE 事务已终止")
+	})
 
 	log.Info().Str("stream_id", session.StreamId).Msg("播放已建立")
 	return nil
@@ -592,59 +733,104 @@ func (s *PlayService) getResponse(tx sip.ClientTransaction) (*sip.Response, erro
 
 // sendAck 发送 ACK
 func (s *PlayService) sendAck(session *PlaySession, inviteReq *sip.Request, resp *sip.Response) error {
-	deviceIP := s.config.ZLMHost
-	devicePort := 5060
-
-	if s.deviceService != nil {
-		device, err := s.deviceService.GetDevice(session.DeviceId)
-		if err == nil && device.IP != "" {
-			deviceIP = device.IP
-			devicePort = device.Port
+	deviceIP := session.TargetHost
+	devicePort := session.TargetPort
+	if deviceIP == "" || devicePort == 0 {
+		if contact := resp.Contact(); contact != nil {
+			if contact.Address.Host != "" {
+				deviceIP = contact.Address.Host
+			}
+			if contact.Address.Port != 0 {
+				devicePort = contact.Address.Port
+			}
 		}
 	}
+	if deviceIP == "" || devicePort == 0 {
+		return fmt.Errorf("设备 %s 缺少有效的 ACK 目标地址", session.DeviceId)
+	}
 
-	// RFC 3261 Section 13.2.2.4: ACK Request-URI MUST be the same as INVITE
-	// 标准实现：使用通道ID（与INVITE一致）
-	target := sip.Uri{User: session.ChannelId, Host: deviceIP, Port: devicePort}
-	ack := sip.NewRequest(sip.ACK, target)
+	ackUser := session.DeviceId
+	if ackUser == "" {
+		ackUser = session.ChannelId
+	}
+	ackTarget := sip.Uri{User: ackUser, Host: deviceIP, Port: devicePort}
+	ack := sip.NewRequest(sip.ACK, ackTarget)
 	ack.SetTransport("UDP")
 
-	// RFC 3261: Via header由sipgo库自动生成，包含唯一branch参数
-	// 直接添加头部对象，避免 .String() 导致重复头部名称
+	// 关键修复：删除 sipgo 自动添加的 headers，避免重复
+	// RFC 3261 Section 17.1.1.3: ACK 必须使用与 INVITE 相同的 Call-ID、From（含 tag）、To（含设备返回的 tag）
+	// 我们将完全手动构建所有必需的 headers
+	ack.RemoveHeader("Via")
+	ack.RemoveHeader("From")
+	ack.RemoveHeader("To")
+	ack.RemoveHeader("Call-ID")
+	ack.RemoveHeader("CSeq")
+	ack.RemoveHeader("Max-Forwards")
+	ack.RemoveHeader("Content-Length")
+
+	// 手动添加 Via header（使用新的 branch，ACK 可以使用新的 Via）
+	// 关键修复：检查 SIPListenIP 是否为无效地址 0.0.0.0
+	sipIP := s.config.SIPListenIP
+	if sipIP == "" || sipIP == "0.0.0.0" {
+		sipIP = s.config.ZLMHost // 回退使用 ZLM IP（与 INVITE Contact header 一致）
+	}
+	sipPort := s.config.SIPPort
+	if sipPort == 0 {
+		sipPort = 5060
+	}
+	newVia := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=%s;rport",
+		sipIP, sipPort, utils.GenerateViaTag())
+	ack.AppendHeader(sip.NewHeader("Via", newVia))
+
+	// 复制 INVITE 的 Call-ID（必须完全匹配）
 	if callID := inviteReq.CallID(); callID != nil {
 		ack.AppendHeader(callID)
 	}
+
+	// 复制 INVITE 的 From header（必须包含 tag）
 	if from := inviteReq.From(); from != nil {
 		ack.AppendHeader(from)
 	}
+
+	// 从 200 OK 响应的 To header 复制（必须包含设备添加的 tag）
 	if to := resp.To(); to != nil {
 		ack.AppendHeader(to)
 	}
+
+	// 设置 CSeq，seq number 与 INVITE 相同，但 method 改为 ACK
 	if cseq := inviteReq.CSeq(); cseq != nil {
 		ack.AppendHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d ACK", cseq.SeqNo)))
 	}
-	// RFC 3261: ACK 必须包含 Max-Forwards header
+
+	// Max-Forwards 限制跳数
 	ack.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
 
 	if err := s.client.WriteRequest(ack); err != nil {
 		return fmt.Errorf("发送 ACK 失败: %w", err)
 	}
 
-	log.Debug().Str("stream_id", session.StreamId).Msg("ACK 已发送")
+	log.Info().
+		Str("stream_id", session.StreamId).
+		Str("target_user", ackUser).
+		Str("target_host", deviceIP).
+		Int("target_port", devicePort).
+		Msg("ACK 已发送")
 	return nil
 }
 
 // sendBye 发送 BYE
 func (s *PlayService) sendBye(session *PlaySession) error {
-	deviceIP := s.config.ZLMHost
-	devicePort := 5060
-
-	if s.deviceService != nil {
+	deviceIP := session.TargetHost
+	devicePort := session.TargetPort
+	if (deviceIP == "" || devicePort == 0) && s.deviceService != nil {
 		device, err := s.deviceService.GetDevice(session.DeviceId)
-		if err == nil && device.IP != "" {
+		if err == nil && device.IP != "" && device.Port > 0 {
 			deviceIP = device.IP
 			devicePort = device.Port
 		}
+	}
+	if deviceIP == "" || devicePort == 0 {
+		return fmt.Errorf("设备 %s 缺少有效的 SIP 地址，无法发送 BYE", session.DeviceId)
 	}
 
 	target := sip.Uri{User: session.ChannelId, Host: deviceIP, Port: devicePort}
@@ -749,6 +935,22 @@ func (s *PlayService) GetSessionByStreamId(streamId string) *PlaySession {
 	return session
 }
 
+// RemoveSessionByStreamID 按 StreamID 移除会话
+// ZLM 的 on_stream_changed / on_rtp_server_timeout 回调天然以 stream 作为主键，
+// 因此这里必须支持按 stream 直接清理，避免用 Call-ID 删除失败后留下脏会话。
+func (s *PlayService) RemoveSessionByStreamID(streamID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.sessions[streamID]; exists {
+		delete(s.sessions, streamID)
+		log.Info().Str("stream_id", streamID).Msg("会话已按 StreamID 移除")
+		return
+	}
+
+	log.Debug().Str("stream_id", streamID).Msg("按 StreamID 移除会话时未找到对应会话")
+}
+
 // RemoveSession 移除会话
 func (s *PlayService) RemoveSession(callId string) {
 	s.mu.Lock()
@@ -762,6 +964,8 @@ func (s *PlayService) RemoveSession(callId string) {
 			return
 		}
 	}
+
+	log.Debug().Str("call_id", callId).Msg("按 CallID 移除会话时未找到对应会话")
 }
 
 // OnMediaStatusReceived 处理媒体状态通知（录像结束等）

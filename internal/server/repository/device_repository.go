@@ -39,6 +39,22 @@ func (r *DeviceRepository) UpdateKeepaliveTime(deviceID string) error {
 		Update("last_keepalive_time", gorm.Expr("datetime('now')")).Error
 }
 
+// UpdateKeepaliveTimeAndAddress 更新心跳时间和设备地址
+func (r *DeviceRepository) UpdateKeepaliveTimeAndAddress(deviceID string, ip string, port int) error {
+	updates := map[string]interface{}{
+		"last_keepalive_time": gorm.Expr("datetime('now')"),
+	}
+	if ip != "" {
+		updates["ip"] = ip
+	}
+	if port > 0 {
+		updates["port"] = port
+	}
+	return r.db.Model(&model.Device{}).
+		Where("device_id = ?", deviceID).
+		Updates(updates).Error
+}
+
 // UpdateRegisterTime 更新注册时间
 func (r *DeviceRepository) UpdateRegisterTime(deviceID string) error {
 	return r.db.Model(&model.Device{}).

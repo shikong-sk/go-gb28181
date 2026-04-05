@@ -112,8 +112,9 @@ func (a *App) Init() error {
 		log.Warn().Err(err).Msg("Redis 连接失败，SSRC 管理服务将不可用")
 	} else {
 		log.Info().Str("addr", a.config.Redis.Addr).Msg("Redis 连接成功")
-		// 初始化 SSRC 服务
-		a.ssrcService = service.NewSsrcService(a.redisClient, a.config.SIP.ServerID)
+		// 初始化 SSRC 服务 - 使用 SIP.DeviceID 提取域编码前缀
+		// COMPAT_WVP: WVP 从域编码提取 SSRC 前缀（如 44050100002000000002 → 50100）
+		a.ssrcService = service.NewSsrcService(a.redisClient, a.config.SIP.DeviceID)
 	}
 
 	// 6. 初始化 ZLMediaKit 客户端
@@ -131,8 +132,10 @@ func (a *App) Init() error {
 	}
 
 	// 8. 初始化播放服务
+	// 使用 buildSIPLocalIP 获取有效的 SIP 本地 IP（避免 0.0.0.0）
+	localIP := buildSIPLocalIP(a.config)
 	if a.zlmClient != nil {
-		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, a.config.SIP.ListenIP, a.config.SIP.ListenPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
+		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort, a.config.ZLMediaKit.RtpPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
 	}
 
 	log.Info().Msg("应用初始化完成")
@@ -177,7 +180,7 @@ func (a *App) Start() error {
 			localIP,
 			a.config.SIP.ListenPort,
 		)
-		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, a.config.SIP.ListenIP, a.config.SIP.ListenPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
+		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort, a.config.ZLMediaKit.RtpPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
 		a.downloadService = service.NewDownloadService(a.playService)
 		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
 		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
@@ -227,6 +230,7 @@ func (a *App) Start() error {
 			config := &currentConfig.Data[0]
 			config.HookEnable = "1"
 			config.HookOnPublish = hookBaseURL + "/on_publish"
+			config.HookOnPlay = hookBaseURL + "/on_play"
 			config.HookOnStreamChanged = hookBaseURL + "/on_stream_changed"
 			config.HookOnStreamNoneReader = hookBaseURL + "/on_stream_none_reader"
 			config.HookOnRtpServerTimeout = hookBaseURL + "/on_rtp_server_timeout"
@@ -479,7 +483,7 @@ func (a *App) Wait() {
 	<-a.ctx.Done()
 }
 
-func buildPlayConfig(rawURL string, localId string, sipListenIP string, sipPort int) service.PlayConfig {
+func buildPlayConfig(rawURL string, localId string, sipListenIP string, sipPort int, rtpPort int) service.PlayConfig {
 	host := "127.0.0.1"
 	port := 80
 	parsedURL := rawURL
@@ -504,9 +508,10 @@ func buildPlayConfig(rawURL string, localId string, sipListenIP string, sipPort 
 		ZLMHost:     host,
 		ZLMPort:     port,
 		AppName:     "rtp",
-		LocalId:     localId, // COMPAT_JAVA: 本地平台 ID
+		LocalId:     localId,
 		SIPListenIP: sipListenIP,
 		SIPPort:     sipPort,
+		RtpPort:     rtpPort,
 	}
 }
 

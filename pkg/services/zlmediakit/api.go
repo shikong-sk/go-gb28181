@@ -83,11 +83,13 @@ func (z *ZLMediaKit) OpenRtpServer(streamId string, port int, tcpMode int) (*typ
 	// 不要强制指定端口范围
 
 	// ZLMediaKit API 使用 GET 方法，不是 POST
+	// COMPAT_WVP: WVP 禁用 SSRC 校验（ssrc_check=0），允许设备使用任意 SSRC 推流
 	req := z.client.R().
 		SetQueryParam("port", strconv.Itoa(port)).
 		SetQueryParam("stream_id", streamId).
 		SetQueryParam("tcp_mode", strconv.Itoa(tcpMode)).
-		SetQueryParam("re_use_port", "1") // 允许端口复用（关键！）
+		SetQueryParam("ssrc_check", "0")
+	// 注意：不再设置only_track参数，使用ZLM默认行为
 
 	// 记录请求详情
 	log.Info().

@@ -102,9 +102,16 @@ func (s *SIPServer) Start() error {
 
 	// 创建 UserAgent
 	addr := fmt.Sprintf("%s:%d", s.config.SIP.ListenIP, s.config.SIP.ListenPort)
+	// COMPAT_WVP: From header hostname 必须是域编码（DeviceID 前10位），不能是 IP:端口
+	domain := ""
+	if len(s.config.SIP.DeviceID) >= 10 {
+		domain = s.config.SIP.DeviceID[:10]
+	} else {
+		domain = s.config.SIP.DeviceID
+	}
 	ua, err := sipgo.NewUA(
 		sipgo.WithUserAgent(s.config.SIP.DeviceID),
-		sipgo.WithUserAgentHostname(addr),
+		sipgo.WithUserAgentHostname(domain), // 使用域编码而非 IP:端口
 	)
 	if err != nil {
 		return fmt.Errorf("创建 UserAgent 失败: %w", err)
@@ -117,9 +124,11 @@ func (s *SIPServer) Start() error {
 	log.Info().Str("external_ip", externalIP).Msg("使用对外 IP")
 
 	// 创建客户端 (发送/回复 SIP 指令) - 使用对外 IP
+	// COMPAT_WVP: 启用 NAT 支持以自动添加 Via ;rport 参数（RFC 3581）
 	client, err := sipgo.NewClient(ua,
 		sipgo.WithClientHostname(externalIP),
 		sipgo.WithClientPort(s.config.SIP.ListenPort),
+		sipgo.WithClientNAT(), // 自动在 Via header 中添加 ;rport 参数
 	)
 	if err != nil {
 		return fmt.Errorf("创建 SIP 客户端失败: %w", err)
@@ -320,9 +329,11 @@ func (s *SIPServer) handleKeepaliveMessage(req *sip.Request, body []byte) {
 
 	log.Debug().Str("device_id", keepalive.DeviceID).Msg("收到心跳消息")
 
-	// 更新设备心跳时间
+	deviceIP, devicePort := extractRequestDeviceAddress(req)
+
+	// 更新设备心跳时间和地址
 	if s.deviceService != nil {
-		if err := s.deviceService.OnDeviceKeepalive(keepalive.DeviceID); err != nil {
+		if err := s.deviceService.OnDeviceKeepalive(keepalive.DeviceID, deviceIP, devicePort); err != nil {
 			log.Error().Err(err).Str("device_id", keepalive.DeviceID).Msg("更新心跳时间失败")
 		}
 	}
@@ -537,24 +548,7 @@ func (s *SIPServer) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	// 获取设备 IP 和端口
-	via := req.Via()
-	var deviceIP string
-	var devicePort int
-	if via != nil {
-		deviceIP = via.Host   // Host 是属性
-		devicePort = via.Port // Port 是属性
-	}
-
-	// 获取 Contact 头的地址（更准确的设备地址）
-	contact := req.Contact()
-	if contact != nil {
-		if contact.Address.Host != "" {
-			deviceIP = contact.Address.Host
-		}
-		if contact.Address.Port > 0 {
-			devicePort = contact.Address.Port
-		}
-	}
+	deviceIP, devicePort := extractRequestDeviceAddress(req)
 
 	// 检查是否需要认证 (401)
 	authorization := req.GetHeader("Authorization")
@@ -661,6 +655,48 @@ func extractDigestURI(authHeader string) string {
 		}
 	}
 	return ""
+}
+
+func extractRequestDeviceAddress(req *sip.Request) (string, int) {
+	deviceIP := ""
+	devicePort := 0
+
+	if source := req.Source(); source != "" {
+		if host, port, err := net.SplitHostPort(source); err == nil {
+			deviceIP = host
+			if parsedPort, convErr := strconv.Atoi(port); convErr == nil && parsedPort > 0 {
+				devicePort = parsedPort
+			}
+		}
+	}
+
+	if via := req.Via(); via != nil {
+		if deviceIP == "" && via.Host != "" {
+			deviceIP = via.Host
+		}
+		if devicePort == 0 && via.Port > 0 {
+			devicePort = via.Port
+		}
+		if received, ok := via.Params.Get("received"); ok && received != "" {
+			deviceIP = received
+		}
+		if rport, ok := via.Params.Get("rport"); ok && rport != "" {
+			if parsedPort, err := strconv.Atoi(rport); err == nil && parsedPort > 0 {
+				devicePort = parsedPort
+			}
+		}
+	}
+
+	if contact := req.Contact(); contact != nil {
+		if deviceIP == "" && contact.Address.Host != "" {
+			deviceIP = contact.Address.Host
+		}
+		if devicePort == 0 && contact.Address.Port > 0 {
+			devicePort = contact.Address.Port
+		}
+	}
+
+	return deviceIP, devicePort
 }
 
 // GetClient 获取 SIP 客户端

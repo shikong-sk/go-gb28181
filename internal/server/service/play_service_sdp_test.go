@@ -7,7 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
+	"github.com/emiago/sipgo/sip"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // TestBuildSDP_RealTimePlay 测试实时播放 SDP 格式
@@ -52,7 +57,7 @@ func TestBuildSDP_RealTimePlay(t *testing.T) {
 		{2, "s=Play", "会话名"},
 		{3, "c=IN IP4 10.10.10.200", "连接信息"},
 		{4, "t=0 0", "时间信息"},
-		{5, "m=video 60000 RTP/AVP 96", "媒体行"},
+		{5, "m=video 60000 RTP/AVP 96 97 98 99", "媒体行"},
 		{6, "a=recvonly", "接收模式"},
 		{7, "a=rtpmap:96 PS/90000", "RTP 映射"},
 	}
@@ -444,4 +449,57 @@ func TestBuildSDP_GB28181_Compliance(t *testing.T) {
 			t.Errorf("SSRC 长度应为 10 位，实际为 %d 位: %s", len(ssrc), ssrc)
 		}
 	}
+}
+
+func TestSendInvite_RequiresDeviceAddress(t *testing.T) {
+	playService := &PlayService{}
+	session := &PlaySession{DeviceId: "44050100001110000008"}
+
+	err := playService.sendInvite(session, "v=0\n")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "缺少有效的 SIP 地址")
+}
+
+func TestSendAck_RequiresAckTarget(t *testing.T) {
+	playService := &PlayService{}
+	session := &PlaySession{DeviceId: "44050100001110000008", ChannelId: "34020000001310000001"}
+	inviteReq := sip.NewRequest(sip.INVITE, sip.Uri{User: session.ChannelId, Host: "10.10.10.210", Port: 5060})
+	resp := sip.NewResponse(200, "OK")
+	resp.AppendHeader(&sip.ContactHeader{Address: sip.Uri{}})
+
+	err := playService.sendAck(session, inviteReq, resp)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "缺少有效的 ACK 目标地址")
+}
+
+func TestAckTargetUserPrefersDeviceID(t *testing.T) {
+	session := &PlaySession{
+		DeviceId:  "44050100001110000008",
+		ChannelId: "34020000001310000001",
+	}
+
+	ackUser := session.DeviceId
+	if ackUser == "" {
+		ackUser = session.ChannelId
+	}
+
+	assert.Equal(t, "44050100001110000008", ackUser)
+}
+
+func TestOnDeviceKeepalive_AutoCreatesUnknownDevice(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&model.Device{}))
+
+	deviceRepo := repository.NewDeviceRepository(db)
+	deviceService := NewDeviceService(deviceRepo, nil, nil)
+
+	err = deviceService.OnDeviceKeepalive("44050100001110000008", "10.10.10.210", 41883)
+	assert.NoError(t, err)
+
+	device, err := deviceService.GetDevice("44050100001110000008")
+	assert.NoError(t, err)
+	assert.Equal(t, "10.10.10.210", device.IP)
+	assert.Equal(t, 41883, device.Port)
+	assert.Equal(t, model.DeviceStatusOnline, device.Status)
 }

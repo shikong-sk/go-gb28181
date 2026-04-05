@@ -99,32 +99,46 @@ func (s *DeviceService) OnDeviceRegister(deviceID, ip string, port int) error {
 	return nil
 }
 
-// OnDeviceKeepalive 设备心跳事件处理
-func (s *DeviceService) OnDeviceKeepalive(deviceID string) error {
-	// 检查设备是否存在
+// OnDeviceKeepalive 设备心跳事件处理，同时更新设备地址
+func (s *DeviceService) OnDeviceKeepalive(deviceID string, ip string, port int) error {
 	exists, err := s.deviceRepo.Exists(deviceID)
 	if err != nil {
 		return err
 	}
 
 	if !exists {
-		log.Warn().Str("device_id", deviceID).Msg("收到未知设备的心跳")
+		device := &model.Device{
+			DeviceID:          deviceID,
+			IP:                ip,
+			Port:              port,
+			Status:            model.DeviceStatusOnline,
+			LastKeepaliveTime: time.Now(),
+		}
+		if port > 0 {
+			device.LastRegisterTime = time.Now()
+		}
+
+		if err := s.deviceRepo.Upsert(device); err != nil {
+			log.Error().Err(err).Str("device_id", deviceID).Msg("保存未知设备心跳信息失败")
+			return err
+		}
+
+		log.Warn().Str("device_id", deviceID).Str("ip", ip).Int("port", port).Msg("收到未知设备的心跳，已自动创建设备记录")
 		return nil
 	}
 
-	// 更新心跳时间和状态
-	if err := s.deviceRepo.UpdateKeepaliveTime(deviceID); err != nil {
-		log.Error().Err(err).Str("device_id", deviceID).Msg("更新心跳时间失败")
+	// 更新心跳时间、状态和设备地址
+	if err := s.deviceRepo.UpdateKeepaliveTimeAndAddress(deviceID, ip, port); err != nil {
+		log.Error().Err(err).Str("device_id", deviceID).Msg("更新心跳时间和地址失败")
 		return err
 	}
 
-	// 同时更新状态为在线
 	if err := s.deviceRepo.UpdateStatus(deviceID, model.DeviceStatusOnline); err != nil {
 		log.Error().Err(err).Str("device_id", deviceID).Msg("更新设备状态失败")
 		return err
 	}
 
-	log.Debug().Str("device_id", deviceID).Msg("设备心跳更新成功")
+	log.Debug().Str("device_id", deviceID).Str("ip", ip).Int("port", port).Msg("设备心跳更新成功")
 	return nil
 }
 

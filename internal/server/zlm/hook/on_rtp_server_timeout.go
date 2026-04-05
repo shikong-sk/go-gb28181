@@ -57,8 +57,10 @@ func (h *HookHandler) OnRtpServerTimeout(c *gin.Context) {
 				}
 			}
 
-			// 移除会话
-			h.playService.RemoveSession(session.CallID)
+			// 按 stream_id 清理会话。
+			// RTP Server 超时回调给出的就是 stream 主键，
+			// 直接按 stream 清理才能和 ZLM 的生命周期保持一致。
+			h.playService.RemoveSessionByStreamID(req.Stream)
 		} else {
 			log.Warn().
 				Str("stream_id", req.Stream).

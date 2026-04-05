@@ -27,6 +27,7 @@ func NewHookHandler(playService *service.PlayService, deviceService *service.Dev
 // RegisterRoutes 注册 Hook 路由
 func (h *HookHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/on_publish", h.OnPublish)
+	r.POST("/on_play", h.OnPlay)
 	r.POST("/on_stream_changed", h.OnStreamChanged)
 	r.POST("/on_stream_none_reader", h.OnStreamNoneReader)
 	r.POST("/on_rtp_server_timeout", h.OnRtpServerTimeout)

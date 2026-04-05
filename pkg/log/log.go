@@ -3,6 +3,7 @@ package log
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -34,7 +35,6 @@ func InitLogger(debug bool) zerolog.Logger {
 	})
 
 	logger := zerolog.New(output).With().Timestamp().Logger()
-
 	if debug {
 		logger = logger.Level(zerolog.DebugLevel)
 	} else {
@@ -48,6 +48,35 @@ func InitLogger(debug bool) zerolog.Logger {
 // SetOutput 设置日志输出目标
 func SetOutput(w io.Writer) {
 	Logger = Logger.Output(w)
+}
+
+// SetupFileLogging 配置日志文件输出。
+// 这是必要的公共入口说明：后台运行时主要依赖日志文件排查，
+// 因此这里统一把结构化日志同时写到控制台和指定文件，避免丢失现场。
+func SetupFileLogging(logFile string) (*os.File, error) {
+	if logFile == "" {
+		return nil, nil
+	}
+
+	dir := filepath.Dir(logFile)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+
+	consoleWriter := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+		w.Out = os.Stdout
+		w.TimeFormat = time.RFC3339
+	})
+	multiWriter := io.MultiWriter(consoleWriter, file)
+	Logger = Logger.Output(multiWriter)
+	return file, nil
 }
 
 // Debug 记录调试日志

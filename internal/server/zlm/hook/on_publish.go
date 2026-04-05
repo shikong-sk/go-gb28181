@@ -29,6 +29,11 @@ type OnPublishResponse struct {
 	EnableRtmp     bool   `json:"enable_rtmp"`      // 是否转 rtmp/flv 协议
 	EnableTs       bool   `json:"enable_ts"`        // 是否转 http-ts/ws-ts 协议
 	EnableFmp4     bool   `json:"enable_fmp4"`      // 是否转 http-fmp4/ws-fmp4 协议
+	HlsDemand      bool   `json:"hls_demand"`       // HLS 是否有人观看才生成
+	RtspDemand     bool   `json:"rtsp_demand"`      // RTSP 是否有人观看才生成
+	RtmpDemand     bool   `json:"rtmp_demand"`      // RTMP 是否有人观看才生成
+	TsDemand       bool   `json:"ts_demand"`        // HTTP-TS 是否有人观看才生成
+	Fmp4Demand     bool   `json:"fmp4_demand"`      // HTTP-FMP4 是否有人观看才生成
 	EnableAudio    bool   `json:"enable_audio"`     // 转协议时是否开启音频
 	AddMuteAudio   bool   `json:"add_mute_audio"`   // 转协议时，无音频是否添加静音 aac 音频
 	Mp4MaxSecond   int    `json:"mp4_max_second"`   // mp4 录制切片大小，单位秒
@@ -61,8 +66,8 @@ func (h *HookHandler) OnPublish(c *gin.Context) {
 		Str("mediaServerId", req.MediaServerId).
 		Msg("[ZLM HOOK] 推流鉴权完整参数")
 
-	// 默认允许推流，并启用所有协议转换
-	// 对于 GB28181 PS流，需要特殊处理时间戳
+	// 默认允许推流，启用所有协议转换
+	// 关键：设置 *_demand = false，让流立即生成而不是等待播放器
 	response := OnPublishResponse{
 		Code:           0, // 0 表示允许推流
 		Msg:            "success",
@@ -73,17 +78,26 @@ func (h *HookHandler) OnPublish(c *gin.Context) {
 		EnableRtmp:     true,  // 启用 RTMP/FLV
 		EnableTs:       true,  // 启用 HTTP-TS
 		EnableFmp4:     true,  // 启用 HTTP-FMP4
-		EnableAudio:    true,  // 启用音频（PS流通常包含音频）
+		HlsDemand:      false, // 关键：不按需生成，立即生成HLS流
+		RtspDemand:     false, // 关键：不按需生成，立即生成RTSP流
+		RtmpDemand:     false, // 关键：不按需生成，立即生成RTMP流
+		TsDemand:       false, // 关键：不按需生成，立即生成TS流
+		Fmp4Demand:     false, // 关键：不按需生成，立即生成FMP4流
+		EnableAudio:    true,  // 启用音频
 		AddMuteAudio:   false, // 不添加静音音频
 		Mp4MaxSecond:   3600,  // MP4 最大时长1小时
-		AutoClose:      false, // 不自动关闭流（关键！）
-		ContinuePushMs: 30000, // 断连续推延时 30秒
+		AutoClose:      false, // 不自动关闭流
+		ContinuePushMs: 15000, // 允许15秒断流续推
 	}
 
 	log.Info().
 		Str("stream", req.Stream).
 		Int("code", response.Code).
-		Msg("[ZLM HOOK] 推流鉴权通过")
+		Bool("hls_demand", response.HlsDemand).
+		Bool("rtsp_demand", response.RtspDemand).
+		Bool("rtmp_demand", response.RtmpDemand).
+		Bool("auto_close", response.AutoClose).
+		Msg("[ZLM HOOK] 推流鉴权通过（包含demand参数）")
 
 	c.JSON(200, response)
 }

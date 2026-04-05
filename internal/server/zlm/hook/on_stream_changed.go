@@ -20,8 +20,10 @@ func (h *HookHandler) OnStreamChanged(c *gin.Context) {
 	log.Info().
 		Str("app", req.App).
 		Str("stream", req.Stream).
-		Bool("register", req.Register).
+		Bool("regist", req.Regist).
 		Str("schema", req.Schema).
+		Int("alive_second", req.AliveSecond).
+		Int("reader_count", req.ReaderCount).
 		Msg("收到流状态变化 Hook")
 
 	// 解析流 ID（格式：deviceId_channelId）
@@ -33,21 +35,32 @@ func (h *HookHandler) OnStreamChanged(c *gin.Context) {
 	}
 
 	// 判断流是注册还是注销
-	if req.Register {
+	// 注意：regist=false 不代表设备真正停止推流，可能是 ZLM 启动过程的正常行为
+	// 真正的流停止应该通过 on_stream_none_reader 或 on_rtp_server_timeout 判断
+	if req.Regist {
 		// 流注册：设备推流成功
 		log.Info().
 			Str("device_id", deviceId).
 			Str("channel_id", channelId).
+			Int("alive_second", req.AliveSecond).
+			Int("total_reader_count", req.TotalReaderCount).
 			Msg("设备推流成功，流已注册")
 
-		// 可以在这里更新通道状态为"正在播放"
-		// 目前仅记录日志，后续可扩展
+		// 通知 PlayService 流注册成功
+		if h.playService != nil {
+			h.playService.NotifyStreamRegistered(req.Stream)
+		}
 	} else {
-		// 流注销：设备停止推流
-		log.Info().
+		// 流注销通知：但不要立即清理，等待 on_stream_none_reader 或 on_rtp_server_timeout
+		// 原因：ZLM 刚开始推流时可能先触发 regist=false，这是启动过程的正常行为
+		log.Warn().
 			Str("device_id", deviceId).
 			Str("channel_id", channelId).
-			Msg("设备停止推流，流已注销")
+			Str("schema", req.Schema).
+			Msg("收到流注销通知，但不立即清理（等待 none_reader 或 timeout hook）")
+
+		// 不执行清理逻辑，让流自然超时或通过其他 hook 清理
+		// 这样可以避免误杀刚启动的流
 
 		// 清理播放会话并释放资源
 		if h.playService != nil {
@@ -73,8 +86,10 @@ func (h *HookHandler) OnStreamChanged(c *gin.Context) {
 					}
 				}
 
-				// 移除会话
-				h.playService.RemoveSession(session.CallID)
+				// 按 stream_id 清理会话。
+				// 这里的 hook 请求主键就是 req.Stream，
+				// 如果错误地改用 Call-ID 删除，会导致会话残留，后续复用旧会话时误判“播放已建立”。
+				h.playService.RemoveSessionByStreamID(req.Stream)
 			}
 		}
 	}
