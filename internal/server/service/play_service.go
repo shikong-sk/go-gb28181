@@ -78,6 +78,10 @@ type PlaySession struct {
 	UserStopped         bool      // 用户是否主动停止（区分用户停止和自动断流）
 	DisconnectDetecting bool      // 是否正在等待断流检测结果（防止重复启动检测）
 
+	// 多人观看相关字段
+	ViewerCount  int  // 实际观看者计数（Play 调用次数）
+	PendingClose bool // 是否处于延迟关闭等待中（观看者为0时等待60秒）
+
 	streamRegistered chan bool // 流注册通知 channel（内部使用）
 }
 
@@ -160,10 +164,16 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		if existingSession != nil {
 			// 检查 ZLM 流是否真的存在
 			if s.isStreamActive(existingSession.StreamId) {
+				// 复用现有流，增加观看者计数
+				s.mu.Lock()
+				existingSession.ViewerCount++
+				existingSession.PendingClose = false // 取消延迟关闭状态
+				s.mu.Unlock()
 				log.Info().
 					Str("device_id", deviceId).
 					Str("existing_stream_id", existingSession.StreamId).
 					Str("new_channel_id", channelId).
+					Int("viewer_count", existingSession.ViewerCount).
 					Bool("bye_sent", existingSession.ByeSent).
 					Msg("设备已有活跃实时流，复用现有流地址（不发送BYE）")
 				return s.buildPlayResult(existingSession), nil
@@ -181,13 +191,17 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 
 	streamId := s.generateStreamId(deviceId, channelId, mode, rangeStart, rangeEnd)
 
-	s.mu.RLock()
+	s.mu.Lock()
 	if session, exists := s.sessions[streamId]; exists && session.Status == PlayStatusPlaying {
-		s.mu.RUnlock()
 		// 检查 ZLM 流是否真的存在（避免返回已断开的会话）
 		if s.isStreamActive(streamId) {
+			// 复用现有会话，增加观看者计数
+			session.ViewerCount++
+			session.PendingClose = false // 取消延迟关闭状态
+			s.mu.Unlock()
 			log.Info().
 				Str("stream_id", streamId).
+				Int("viewer_count", session.ViewerCount).
 				Bool("bye_sent", session.ByeSent).
 				Msg("会话已存在且流活跃，复用会话（不发送BYE）")
 			return s.buildPlayResult(session), nil
@@ -199,9 +213,8 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 			Bool("bye_sent", session.ByeSent).
 			Msg("会话存在但流已断开，先发送BYE清理旧会话再重新建立")
 		s.cleanupSession(streamId)
-	} else {
-		s.mu.RUnlock()
 	}
+	s.mu.Unlock()
 
 	// 重要：点播场景必须优先让 ZLM 自动分配 RTP 端口。
 	// 用户已经明确说明：应以 openRtpServer API 返回的端口为准，
@@ -282,6 +295,7 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		RangeEnd:         rangeEnd,
 		TargetHost:       deviceIP,
 		TargetPort:       devicePort,
+		ViewerCount:      1,                  // 初始观看者计数为1
 		streamRegistered: make(chan bool, 1), // 创建流注册通知 channel
 	}
 
@@ -366,6 +380,7 @@ func (s *PlayService) cleanupSession(streamId string) {
 }
 
 // Stop 停止播放（用户主动停止）
+// 支持多人观看：只有最后一个观看者停止后，等待60秒才真正断流
 func (s *PlayService) Stop(streamId string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,32 +390,183 @@ func (s *PlayService) Stop(streamId string) error {
 		return fmt.Errorf("会话不存在: %s", streamId)
 	}
 
-	// 标记为用户主动停止，防止自动重连
-	session.UserStopped = true
-	session.RetryCount = 3 // 设置为最大重连次数，防止 CheckStreamHealth 触发重连
-
-	// 如果 BYE 未发送，先发送 BYE
-	if !session.ByeSent {
-		if err := s.sendBye(session); err != nil {
-			log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 BYE 失败")
-		}
-		session.ByeSent = true
+	// 减少观看者计数
+	if session.ViewerCount > 0 {
+		session.ViewerCount--
 	}
 
-	if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
-		log.Warn().Err(err).Str("stream_id", streamId).Msg("关闭 RTP 服务器失败")
+	// 如果还有其他观看者，不停止流
+	if session.ViewerCount > 0 {
+		log.Info().
+			Str("stream_id", streamId).
+			Int("remaining_viewers", session.ViewerCount).
+			Msg("停止观看请求，但仍有其他观看者，保持流继续")
+		return nil
 	}
 
-	// 释放 SSRC
-	if s.ssrcService != nil && session.SSRC != "" {
-		s.ssrcService.ReleaseSsrc(session.SSRC)
-	}
+	// 最后一个观看者停止，进入延迟关闭等待状态
+	session.PendingClose = true
+	log.Info().
+		Str("stream_id", streamId).
+		Msg("最后一个观看者停止，进入60秒延迟关闭等待")
 
-	session.Status = PlayStatusStopped
-	delete(s.sessions, streamId)
+	// 异步等待60秒后真正断流
+	// 在发送 BYE 前，会查询 ZLM 确认实际观看人数
+	go s.delayedCloseWithZlmVerify(streamId)
 
-	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Bool("user_stopped", true).Msg("用户主动停止播放")
 	return nil
+}
+
+// delayedCloseWithZlmVerify 延迟关闭流程，带 ZLM 观看人数二次确认
+// 1. 等待60秒
+// 2. 查询 ZLM 的 GetMediaList 获取实际观看人数
+// 3. 如果观看人数 > 0，继续推迟60秒再检测
+// 4. 如果观看人数 = 0，发送 BYE 断开流
+func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
+	for {
+		// 等待60秒
+		time.Sleep(60 * time.Second)
+
+		s.mu.Lock()
+
+		// 再次检查会话状态
+		session, exists := s.sessions[streamId]
+		if !exists {
+			s.mu.Unlock()
+			return
+		}
+
+		// 如果期间有新的观看者，取消断流
+		if session.ViewerCount > 0 {
+			session.PendingClose = false
+			s.mu.Unlock()
+			log.Info().
+				Str("stream_id", streamId).
+				Int("viewer_count", session.ViewerCount).
+				Msg("延迟关闭期间有新观看者，取消断流")
+			return
+		}
+
+		// 如果不在延迟关闭状态，可能已被其他流程处理
+		if !session.PendingClose {
+			s.mu.Unlock()
+			return
+		}
+
+		s.mu.Unlock()
+
+		// 查询 ZLM 获取实际观看人数
+		zlmReaderCount := s.getZlmReaderCount(streamId)
+
+		if zlmReaderCount > 0 {
+			// ZLM 报告仍有观看者，继续推迟60秒再检测
+			log.Info().
+				Str("stream_id", streamId).
+				Int64("zlm_reader_count", zlmReaderCount).
+				Msg("ZLM 报告仍有观看者，继续推迟60秒再检测")
+			continue // 继续循环，再次等待60秒
+		}
+
+		// ZLM 确认无人观看，真正断开流
+		s.mu.Lock()
+		session, exists = s.sessions[streamId]
+		if !exists {
+			s.mu.Unlock()
+			return
+		}
+
+		// 再次检查状态（可能在查询 ZLM 期间发生变化）
+		if session.ViewerCount > 0 || !session.PendingClose {
+			s.mu.Unlock()
+			return
+		}
+
+		// 标记为用户主动停止，防止自动重连
+		session.UserStopped = true
+		session.RetryCount = 3 // 设置为最大重连次数，防止 CheckStreamHealth 触发重连
+
+		// 如果 BYE 未发送，先发送 BYE
+		if !session.ByeSent {
+			if err := s.sendBye(session); err != nil {
+				log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 BYE 失败")
+			}
+			session.ByeSent = true
+		}
+
+		if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("关闭 RTP 服务器失败")
+		}
+
+		// 释放 SSRC
+		if s.ssrcService != nil && session.SSRC != "" {
+			s.ssrcService.ReleaseSsrc(session.SSRC)
+		}
+
+		session.Status = PlayStatusStopped
+		delete(s.sessions, streamId)
+
+		s.mu.Unlock()
+
+		log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Msg("ZLM 确认无人观看，断开流")
+		return // 断开流完成，退出循环
+	}
+}
+
+// TriggerDelayedClose 触发延迟关闭检测
+// 由 on_stream_none_reader webhook 调用
+// 当 ZLM 报告无观看者时，启动延迟关闭流程
+func (s *PlayService) TriggerDelayedClose(streamId string) {
+	s.mu.Lock()
+	session, exists := s.sessions[streamId]
+	if !exists {
+		s.mu.Unlock()
+		return
+	}
+
+	// 如果已经在延迟关闭等待中，跳过
+	if session.PendingClose {
+		s.mu.Unlock()
+		log.Debug().Str("stream_id", streamId).Msg("已在延迟关闭等待中，跳过")
+		return
+	}
+
+	// 设置延迟关闭标记
+	session.PendingClose = true
+	s.mu.Unlock()
+
+	log.Info().Str("stream_id", streamId).Msg("ZLM 报告无观看者，进入60秒延迟关闭等待")
+
+	// 异步启动延迟关闭流程（会查询 ZLM 确认观看人数）
+	go s.delayedCloseWithZlmVerify(streamId)
+}
+
+// getZlmReaderCount 从 ZLM 获取流的实际观看人数
+// 返回 TotalReaderCount（总观看人数）
+func (s *PlayService) getZlmReaderCount(streamId string) int64 {
+	if s.zlm == nil {
+		return 0
+	}
+
+	// 使用 GetMediaList 查询流信息
+	mediaList, err := s.zlm.GetMediaList(s.config.AppName, streamId)
+	if err != nil {
+		log.Warn().Err(err).Str("stream_id", streamId).Msg("查询 ZLM GetMediaList 失败")
+		return 0
+	}
+
+	if mediaList == nil || mediaList.Code != 0 || len(mediaList.Data) == 0 {
+		log.Debug().Str("stream_id", streamId).Msg("ZLM 未找到该流信息")
+		return 0
+	}
+
+	// 返回 TotalReaderCount（总观看人数）
+	totalReaderCount := mediaList.Data[0].TotalReaderCount
+	log.Debug().
+		Str("stream_id", streamId).
+		Int64("total_reader_count", totalReaderCount).
+		Int64("reader_count", mediaList.Data[0].ReaderCount).
+		Msg("ZLM GetMediaList 返回观看人数")
+	return totalReaderCount
 }
 
 // monitorStreamRegistration 监控流注册超时

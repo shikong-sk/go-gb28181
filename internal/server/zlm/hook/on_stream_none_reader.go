@@ -35,10 +35,13 @@ func (h *HookHandler) OnStreamNoneReader(c *gin.Context) {
 				Str("device_id", deviceId).
 				Str("channel_id", channelId).
 				Str("stream_id", req.Stream).
-				Msg("流无观看者，更新观看人数为0")
+				Msg("流无观看者，触发延迟关闭检测")
 
 			// 更新观看人数为0（用于流复用决策）
 			h.playService.UpdateReaderCount(req.Stream, 0)
+
+			// 触发延迟关闭检测（会查询 ZLM 确认观看人数）
+			h.playService.TriggerDelayedClose(req.Stream)
 		} else {
 			log.Warn().
 				Str("stream_id", req.Stream).

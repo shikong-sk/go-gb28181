@@ -16,20 +16,20 @@ type MediaOriginSock struct {
 }
 
 type MediaTrack struct {
-	Channels      int    `json:"channels"`
-	CodecId       int    `json:"codec_id"`
-	CodecIdName   string `json:"codec_id_name"`
-	CodecType     int    `json:"codec_type"`
-	Fps           int    `json:"fps"`
-	Frames        int64  `json:"frames"`
-	GopIntervalMs int64  `json:"gop_interval_ms"`
-	GopSize       int64  `json:"gop_size"`
-	KeyFrames     int64  `json:"key_frames"`
-	Ready         bool   `json:"ready"`
-	Height        int    `json:"height"`
-	Width         int    `json:"width"`
-	SampleBit     int    `json:"sample_bit"`
-	SampleRate    int    `json:"sample_rate"`
+	Channels      int     `json:"channels"`
+	CodecId       int     `json:"codec_id"`
+	CodecIdName   string  `json:"codec_id_name"`
+	CodecType     int     `json:"codec_type"`
+	Fps           float64 `json:"fps"`
+	Frames        int64   `json:"frames"`
+	GopIntervalMs int64   `json:"gop_interval_ms"`
+	GopSize       int64   `json:"gop_size"`
+	KeyFrames     int64   `json:"key_frames"`
+	Ready         bool    `json:"ready"`
+	Height        int     `json:"height"`
+	Width         int     `json:"width"`
+	SampleBit     int     `json:"sample_bit"`
+	SampleRate    int     `json:"sample_rate"`
 }
 
 type GetMediaListResp = Data[[]GetMediaListRespRaw]

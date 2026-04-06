@@ -71,7 +71,7 @@ func (h *HookHandler) OnPublish(c *gin.Context) {
 	response := OnPublishResponse{
 		Code:           0, // 0 表示允许推流
 		Msg:            "success",
-		EnableHls:      true,  // 启用 HLS
+		EnableHls:      false, // 不启用 HLS（无录制需求）
 		EnableHlsFmp4:  false, // 不启用 HLS-FMP4
 		EnableMp4:      false, // 不录制 MP4
 		EnableRtsp:     true,  // 启用 RTSP

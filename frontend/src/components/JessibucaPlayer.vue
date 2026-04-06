@@ -463,10 +463,18 @@ async function play(url: string) {
     // 监听解复用错误
     demuxer.on(DemuxEvent.DEMUX_ERROR, (error: Error) => {
       console.error('[Demuxer Error]', error)
-      hasError.value = true
-      errorMessage.value = error.message || '解复用错误'
       isLoading.value = false
+      isPlaying.value = false
       emit('error', error)
+
+      // 如果不是用户主动停止，触发断流重连
+      if (!userStopped.value) {
+        console.warn('[Jessibuca] 解复用错误，触发断流重连')
+        handleStreamDisconnect()
+      } else {
+        hasError.value = true
+        errorMessage.value = error.message || '解复用错误'
+      }
     })
 
     // 设置数据回调
@@ -641,12 +649,29 @@ async function handleStreamDisconnect() {
     if (props.url) {
       await play(props.url)
 
-      // 重连成功
+      // 重连成功检查（等待一段时间确认是否有帧到达）
+      await new Promise(resolve => setTimeout(resolve, 3000))
+
       if (isPlaying.value) {
         console.log('[Jessibuca] 重连成功')
         isReconnecting.value = false
         reconnectCount.value = 0
         lastFrameTime = Date.now()
+      } else {
+        // 重连后仍未播放成功，安排下次重连
+        console.warn('[Jessibuca] 重连后仍未收到视频帧，安排下次重连')
+        if (reconnectCount.value < reconnectMaxCount && !userStopped.value) {
+          loadingText.value = `重连失败，${reconnectInterval / 1000}秒后重试 (${reconnectCount.value}/${reconnectMaxCount})`
+          reconnectTimer = setTimeout(() => {
+            isReconnecting.value = false  // 重置状态允许下次重连
+            handleStreamDisconnect()
+          }, reconnectInterval)
+        } else {
+          hasError.value = true
+          errorMessage.value = `播放中断，已重连${reconnectMaxCount}次失败`
+          isReconnecting.value = false
+          isLoading.value = false
+        }
       }
     }
   } catch (error) {
@@ -658,6 +683,7 @@ async function handleStreamDisconnect() {
       loadingText.value = `重连失败，${reconnectInterval / 1000}秒后重试 (${reconnectCount.value}/${reconnectMaxCount})`
 
       reconnectTimer = setTimeout(() => {
+        isReconnecting.value = false  // 重置状态允许下次重连
         handleStreamDisconnect()
       }, reconnectInterval)
     } else {
