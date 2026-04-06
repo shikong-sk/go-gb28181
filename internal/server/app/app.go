@@ -264,6 +264,7 @@ func (a *App) Start() error {
 	go a.startDownloadCleanup()
 	go a.startPlaySessionCleanup()
 	go a.startRecordFetch()
+	go a.startStreamHealthCheck() // 流断开超时检测
 
 	return nil
 }
@@ -307,20 +308,43 @@ func (a *App) Stop() {
 
 	log.Info().Msg("正在停止应用...")
 
+	// 1. 先停止 HTTP Server（不再接受新请求）
 	if a.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := a.httpServer.Shutdown(ctx); err != nil {
 			log.Error().Err(err).Msg("HTTP 服务关闭失败")
 		}
+		log.Info().Msg("HTTP 服务已关闭")
 	}
 
+	// 2. 发送所有 BYE（清理活跃会话）- 在关闭 SIP Server 之前执行
+	// 确保 SIP 客户端还可用于发送 BYE 请求
+	if a.playService != nil {
+		// 使用带超时的 goroutine 避免关闭过程过长
+		done := make(chan struct{})
+		go func() {
+			a.playService.StopAllSessions()
+			close(done)
+		}()
+		select {
+		case <-done:
+			log.Info().Msg("播放会话清理完成")
+		case <-time.After(10 * time.Second):
+			log.Warn().Msg("播放会话清理超时，强制继续关闭")
+		}
+	}
+
+	// 3. 关闭 SIP Server
 	if a.sipServer != nil {
 		a.sipServer.Stop()
+		log.Info().Msg("SIP 服务已关闭")
 	}
 
+	// 4. 关闭其他服务
 	if a.wsManager != nil {
 		a.wsManager.Stop()
+		log.Info().Msg("WebSocket 服务已关闭")
 	}
 
 	if a.recordFetchService != nil {
@@ -455,6 +479,26 @@ func (a *App) startRecordFetch() {
 	}
 	// 默认每小时拉取一次录像缓存
 	a.recordFetchService.StartBackgroundFetcher(1 * time.Hour)
+}
+
+// startStreamHealthCheck 启动流健康检查定时任务 (每1秒执行)
+// 检查所有活跃会话的流是否断开超过3秒未恢复，如果是则触发重连
+func (a *App) startStreamHealthCheck() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			log.Info().Msg("流健康检查任务停止")
+			return
+		case <-ticker.C:
+			if a.playService != nil {
+				// 流断开超过3秒触发重连（重连逻辑：BYE->2秒等待->INVITE->10秒等待->最多3次）
+				a.playService.CheckStreamHealth(3 * time.Second)
+			}
+		}
+	}
 }
 
 // GetDeviceService 获取设备服务

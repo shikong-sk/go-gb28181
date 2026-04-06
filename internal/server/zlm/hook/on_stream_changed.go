@@ -46,51 +46,37 @@ func (h *HookHandler) OnStreamChanged(c *gin.Context) {
 			Int("total_reader_count", req.TotalReaderCount).
 			Msg("设备推流成功，流已注册")
 
-		// 通知 PlayService 流注册成功
+		// 通知 PlayService 流注册成功，同时更新活跃时间
 		if h.playService != nil {
 			h.playService.NotifyStreamRegistered(req.Stream)
+			// 流持续活跃时更新活跃时间（用于健康检查）
+			h.playService.UpdateStreamActiveTime(req.Stream)
+			// 更新观看人数
+			h.playService.UpdateReaderCount(req.Stream, req.TotalReaderCount)
 		}
 	} else {
-		// 流注销通知：但不要立即清理，等待 on_stream_none_reader 或 on_rtp_server_timeout
-		// 原因：ZLM 刚开始推流时可能先触发 regist=false，这是启动过程的正常行为
-		log.Warn().
-			Str("device_id", deviceId).
-			Str("channel_id", channelId).
-			Str("schema", req.Schema).
-			Msg("收到流注销通知，但不立即清理（等待 none_reader 或 timeout hook）")
+		// 流注销通知：只有流存活超过10秒才触发断流检测
+		// ZLM 推流开始时会先发 regist=false (alive_second=0) 表示旧流注销
+		// 然后发 regist=true 表示新流注册，这是正常流程，不应触发断流检测
+		if req.AliveSecond > 10 {
+			log.Warn().
+				Str("device_id", deviceId).
+				Str("channel_id", channelId).
+				Str("schema", req.Schema).
+				Int("alive_second", req.AliveSecond).
+				Msg("收到流注销通知，触发断流检测")
 
-		// 不执行清理逻辑，让流自然超时或通过其他 hook 清理
-		// 这样可以避免误杀刚启动的流
-
-		// 清理播放会话并释放资源
-		if h.playService != nil {
-			session, exists := h.playService.GetSession(req.Stream)
-			if exists {
-				log.Info().Str("stream_id", req.Stream).Msg("清理播放会话")
-
-				// 释放 SSRC
-				if h.ssrcService != nil && session.SSRC != "" {
-					if err := h.ssrcService.ReleaseSsrc(session.SSRC); err != nil {
-						log.Warn().Err(err).Str("ssrc", session.SSRC).Msg("释放 SSRC 失败")
-					} else {
-						log.Info().Str("ssrc", session.SSRC).Msg("SSRC 已释放")
-					}
-				}
-
-				// 关闭 RTP 服务器
-				if h.zlmClient != nil {
-					if _, err := h.zlmClient.CloseRtpServer(req.Stream); err != nil {
-						log.Warn().Err(err).Str("stream_id", req.Stream).Msg("关闭 RTP 服务器失败")
-					} else {
-						log.Info().Str("stream_id", req.Stream).Msg("RTP 服务器已关闭")
-					}
-				}
-
-				// 按 stream_id 清理会话。
-				// 这里的 hook 请求主键就是 req.Stream，
-				// 如果错误地改用 Call-ID 删除，会导致会话残留，后续复用旧会话时误判“播放已建立”。
-				h.playService.RemoveSessionByStreamID(req.Stream)
+			// 触发断流检测和重连
+			if h.playService != nil {
+				h.playService.OnStreamDisconnected(req.Stream)
 			}
+		} else {
+			log.Debug().
+				Str("device_id", deviceId).
+				Str("channel_id", channelId).
+				Str("schema", req.Schema).
+				Int("alive_second", req.AliveSecond).
+				Msg("收到流注销通知，流存活时间短，忽略（可能是正常推流流程）")
 		}
 	}
 

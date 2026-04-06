@@ -37,30 +37,35 @@ func (h *HookHandler) OnRtpServerTimeout(c *gin.Context) {
 				Str("device_id", deviceId).
 				Str("channel_id", channelId).
 				Str("stream_id", req.Stream).
-				Msg("RTP 服务器超时，清理播放会话")
+				Msg("RTP 服务器超时，发送 BYE 并清理播放会话")
 
-			// 释放 SSRC
-			if h.ssrcService != nil && session.SSRC != "" {
-				if err := h.ssrcService.ReleaseSsrc(session.SSRC); err != nil {
-					log.Warn().Err(err).Str("ssrc", session.SSRC).Msg("释放 SSRC 失败")
-				} else {
-					log.Info().Str("ssrc", session.SSRC).Msg("SSRC 已释放")
+			// 发送 BYE 给设备（关键：通知设备停止推流）
+			if err := h.playService.StopWithBye(req.Stream); err != nil {
+				log.Warn().Err(err).Str("stream_id", req.Stream).Msg("发送 BYE 失败，继续清理本地资源")
+				// 即使 BYE 发送失败，也继续清理本地资源
+
+				// 释放 SSRC
+				if h.ssrcService != nil && session.SSRC != "" {
+					if err := h.ssrcService.ReleaseSsrc(session.SSRC); err != nil {
+						log.Warn().Err(err).Str("ssrc", session.SSRC).Msg("释放 SSRC 失败")
+					} else {
+						log.Info().Str("ssrc", session.SSRC).Msg("SSRC 已释放")
+					}
 				}
-			}
 
-			// 关闭 RTP 服务器（重要：ZLM 超时时需要主动关闭）
-			if h.zlmClient != nil {
-				if _, err := h.zlmClient.CloseRtpServer(req.Stream); err != nil {
-					log.Warn().Err(err).Str("stream_id", req.Stream).Msg("关闭 RTP 服务器失败")
-				} else {
-					log.Info().Str("stream_id", req.Stream).Msg("RTP 服务器已关闭")
+				// 关闭 RTP 服务器（重要：ZLM 超时时需要主动关闭）
+				if h.zlmClient != nil {
+					if _, err := h.zlmClient.CloseRtpServer(req.Stream); err != nil {
+						log.Warn().Err(err).Str("stream_id", req.Stream).Msg("关闭 RTP 服务器失败")
+					} else {
+						log.Info().Str("stream_id", req.Stream).Msg("RTP 服务器已关闭")
+					}
 				}
-			}
 
-			// 按 stream_id 清理会话。
-			// RTP Server 超时回调给出的就是 stream 主键，
-			// 直接按 stream 清理才能和 ZLM 的生命周期保持一致。
-			h.playService.RemoveSessionByStreamID(req.Stream)
+				// 按 stream_id 清理会话
+				h.playService.RemoveSessionByStreamID(req.Stream)
+			}
+			// StopWithBye 成功时已经完成了所有清理工作
 		} else {
 			log.Warn().
 				Str("stream_id", req.Stream).

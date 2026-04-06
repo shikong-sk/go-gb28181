@@ -1,11 +1,9 @@
 <template>
   <div ref="containerRef" class="jessibuca-container tw-w-full tw-h-full tw-relative">
     <!-- 加载状态显示 -->
-    <div v-if="isLoading" class="loading-overlay tw-absolute tw-inset-0 tw-flex tw-items-center tw-justify-center tw-bg-gray-900 tw-z-10">
-      <div class="tw-text-center">
-        <div class="loading-spinner tw-mb-4"></div>
-        <p class="tw-text-gray-400 tw-text-sm">{{ loadingText }}</p>
-      </div>
+    <div v-if="isLoading" class="loading-overlay tw-absolute tw-inset-0 tw-flex tw-flex-col tw-items-center tw-justify-center tw-bg-gray-900 tw-z-10">
+      <div class="loading-spinner"></div>
+      <p class="tw-text-gray-400 tw-text-sm tw-mt-4">{{ loadingText }}</p>
     </div>
 
     <!-- 错误状态显示 -->
@@ -81,6 +79,9 @@
         <!-- 旋转按钮 -->
         <el-button :icon="RefreshRight" circle size="small" @click="rotateVideo" />
 
+        <!-- 页面内全屏按钮 -->
+        <el-button :icon="isPageFullscreen ? Aim : Rank" circle size="small" @click="togglePageFullscreen" />
+
         <!-- 全屏按钮 -->
         <el-button :icon="FullScreen" circle size="small" @click="toggleFullscreen" />
       </div>
@@ -92,11 +93,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ArrowDown,
+  Aim,
   Cpu,
   FullScreen,
   Monitor,
   Mute,
   Microphone,
+  Rank,
   Refresh,
   RefreshRight,
   VideoCameraFilled,
@@ -171,6 +174,17 @@ const duration = ref(0)
 const muted = ref(props.muted)
 const bufferedPercent = ref(0)
 const rotation = ref(0) // 画面旋转角度：0, 90, 180, 270
+const isPageFullscreen = ref(false) // 页面内全屏状态
+
+// 断流重连状态
+const isReconnecting = ref(false)
+const reconnectCount = ref(0)
+const reconnectMaxCount = 5  // 最大重连次数
+const reconnectInterval = 10000  // 重连间隔（毫秒）
+const userStopped = ref(false)  // 用户是否主动停止
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let lastFrameTime = 0  // 最后收到帧的时间
+let frameCheckInterval: ReturnType<typeof setInterval> | null = null
 
 // 解码器状态
 const videoDecoder = ref<VideoDecoderType>(props.videoDecoder === 'auto' ? props.defaultDecoder : props.videoDecoder)
@@ -350,11 +364,13 @@ async function initPlayer() {
           renderer.writeVideo(videoFrame)
         }
         frameCount++
+        lastFrameTime = Date.now()  // 更新最后收到帧的时间
         if (frameCount === 5) {
           isLoading.value = false
           isPlaying.value = true
           emit('playing')
           startStatsUpdate()
+          startFrameCheck()  // 启动断流检测
         }
       })
 
@@ -405,6 +421,9 @@ async function play(url: string) {
   isPlaying.value = false
   isPaused.value = false
   frameCount = 0
+  userStopped.value = false  // 重置用户停止标记
+  isReconnecting.value = false
+  lastFrameTime = Date.now()
 
   try {
     // 根据URL类型创建连接
@@ -535,9 +554,136 @@ function startStatsUpdate() {
   }, 250)
 }
 
+// 启动断流检测
+function startFrameCheck() {
+  if (frameCheckInterval) {
+    clearInterval(frameCheckInterval)
+  }
+  lastFrameTime = Date.now()
+  userStopped.value = false
+
+  // 每2秒检查一次是否有新帧
+  frameCheckInterval = setInterval(() => {
+    if (!isPlaying.value || isPaused.value || userStopped.value || isReconnecting.value) {
+      return
+    }
+
+    const now = Date.now()
+    const elapsed = now - lastFrameTime
+
+    // 超过5秒没有收到新帧，判定为断流
+    if (elapsed > 5000) {
+      console.warn('[Jessibuca] 断流检测：超过5秒未收到视频帧，触发重连')
+      handleStreamDisconnect()
+    }
+  }, 2000)
+}
+
+// 停止断流检测
+function stopFrameCheck() {
+  if (frameCheckInterval) {
+    clearInterval(frameCheckInterval)
+    frameCheckInterval = null
+  }
+}
+
+// 处理断流
+async function handleStreamDisconnect() {
+  // 如果用户主动停止，不触发重连
+  if (userStopped.value) {
+    return
+  }
+
+  // 如果已在重连中，跳过
+  if (isReconnecting.value) {
+    return
+  }
+
+  // 检查重连次数
+  if (reconnectCount.value >= reconnectMaxCount) {
+    console.error('[Jessibuca] 已达最大重连次数，停止重连')
+    hasError.value = true
+    errorMessage.value = `播放中断，已重连${reconnectMaxCount}次失败`
+    isReconnecting.value = false
+    return
+  }
+
+  isReconnecting.value = true
+  reconnectCount.value++
+  console.log(`[Jessibuca] 开始第 ${reconnectCount.value} 次重连...`)
+
+  // 显示重连状态
+  hasError.value = false
+  isLoading.value = true
+  loadingText.value = `连接中断，正在重连 (${reconnectCount.value}/${reconnectMaxCount})...`
+
+  try {
+    // 关闭当前连接
+    if (conn) {
+      conn.close()
+      conn = null
+    }
+    if (demuxer) {
+      demuxer = null
+    }
+
+    // 等待一段时间后重连
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    // 如果用户已停止，取消重连
+    if (userStopped.value) {
+      isReconnecting.value = false
+      isLoading.value = false
+      return
+    }
+
+    // 重新播放
+    if (props.url) {
+      await play(props.url)
+
+      // 重连成功
+      if (isPlaying.value) {
+        console.log('[Jessibuca] 重连成功')
+        isReconnecting.value = false
+        reconnectCount.value = 0
+        lastFrameTime = Date.now()
+      }
+    }
+  } catch (error) {
+    console.error('[Jessibuca] 重连失败:', error)
+
+    // 重连失败，安排下次重连
+    if (reconnectCount.value < reconnectMaxCount && !userStopped.value) {
+      console.log(`[Jessibuca] ${reconnectInterval / 1000}秒后进行下次重连...`)
+      loadingText.value = `重连失败，${reconnectInterval / 1000}秒后重试 (${reconnectCount.value}/${reconnectMaxCount})`
+
+      reconnectTimer = setTimeout(() => {
+        handleStreamDisconnect()
+      }, reconnectInterval)
+    } else {
+      // 达到最大重连次数
+      hasError.value = true
+      errorMessage.value = `播放中断，已重连${reconnectMaxCount}次失败`
+      isReconnecting.value = false
+      isLoading.value = false
+    }
+  }
+}
+
+// 取消重连
+function cancelReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  isReconnecting.value = false
+}
+
 // 重试播放
 async function retryPlay() {
   if (props.url) {
+    reconnectCount.value = 0  // 手动重试时重置重连计数
+    userStopped.value = false
     await destroy()
     await initPlayer()
   }
@@ -648,8 +794,23 @@ function toggleFullscreen() {
   }
 }
 
+// 页面内全屏切换
+function togglePageFullscreen() {
+  isPageFullscreen.value = !isPageFullscreen.value
+  if (containerRef.value) {
+    if (isPageFullscreen.value) {
+      containerRef.value.classList.add('page-fullscreen')
+    } else {
+      containerRef.value.classList.remove('page-fullscreen')
+    }
+  }
+}
+
 // 暂停
 function pause() {
+  userStopped.value = true  // 标记用户主动停止
+  cancelReconnect()
+  stopFrameCheck()
   if (conn) {
     conn.close()
     conn = null
@@ -661,6 +822,11 @@ function pause() {
 // 销毁播放器
 async function destroy() {
   try {
+    // 标记用户停止，取消重连
+    userStopped.value = true
+    cancelReconnect()
+    stopFrameCheck()
+
     if (statsInterval) {
       clearInterval(statsInterval)
       statsInterval = null
@@ -691,6 +857,8 @@ async function destroy() {
     isPaused.value = false
     currentTime.value = 0
     bufferedPercent.value = 0
+    isReconnecting.value = false
+    reconnectCount.value = 0
   } catch (error) {
     console.error('销毁播放器失败:', error)
   }
@@ -744,6 +912,16 @@ defineExpose({
   width: 100%;
   height: 100%;
   position: relative;
+}
+
+/* 页面内全屏样式 */
+.jessibuca-container.page-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
 }
 
 .jessibuca-container canvas,

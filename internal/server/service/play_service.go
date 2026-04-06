@@ -50,24 +50,35 @@ const (
 
 // PlaySession 播放会话
 type PlaySession struct {
-	StreamId         string     // 流 ID
-	DeviceId         string     // 设备 ID
-	ChannelId        string     // 通道 ID
-	RTPPort          int        // RTP 端口
-	StartTime        time.Time  // 会话创建时间
-	Status           string     // 状态: pending, playing, stopped
-	SSRC             string     // SSRC
-	Mode             PlayMode   // 播放模式
-	RangeStart       *time.Time // 回放开始时间
-	RangeEnd         *time.Time // 回放结束时间
-	TargetHost       string     // 目标设备 IP
-	TargetPort       int        // 目标设备端口
-	Via              string     // Via header value
-	CallID           string     // Call-ID value
-	From             string     // From header value
-	To               string     // To header value (from 200 OK response)
-	CSeq             int        // CSeq number
-	streamRegistered chan bool  // 流注册通知 channel（内部使用）
+	StreamId       string     // 流 ID
+	DeviceId       string     // 设备 ID
+	ChannelId      string     // 通道 ID
+	RTPPort        int        // RTP 端口
+	StartTime      time.Time  // 会话创建时间
+	LastActiveTime time.Time  // 流最后活跃时间（用于超时检测）
+	Status         string     // 状态: pending, playing, stopped
+	SSRC           string     // SSRC
+	Mode           PlayMode   // 播放模式
+	RangeStart     *time.Time // 回放开始时间
+	RangeEnd       *time.Time // 回放结束时间
+	TargetHost     string     // 目标设备 IP
+	TargetPort     int        // 目标设备端口
+	Via            string     // Via header value
+	CallID         string     // Call-ID value
+	From           string     // From header value
+	To             string     // To header value (from 200 OK response)
+	CSeq           int        // CSeq number
+	ByeSent        bool       // BYE 是否已发送（用于 INVITE 前 BYE 检查）
+	ReaderCount    int        // 当前观看人数（来自 ZLM webhook）
+
+	// 重连相关字段
+	RetryCount          int       // 当前重连尝试次数（最多3次）
+	LastRetryTime       time.Time // 上次重连尝试时间
+	IsReconnecting      bool      // 是否正在重连中
+	UserStopped         bool      // 用户是否主动停止（区分用户停止和自动断流）
+	DisconnectDetecting bool      // 是否正在等待断流检测结果（防止重复启动检测）
+
+	streamRegistered chan bool // 流注册通知 channel（内部使用）
 }
 
 // PlayResult 播放结果
@@ -142,6 +153,32 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		return nil, fmt.Errorf("ZLMediaKit 未初始化")
 	}
 
+	// 设备单流限制：仅对实时流生效，回放和下载不受限制
+	// INVITE 前 BYE 检查：如果旧会话存在且 BYE 未发送，需要先发送 BYE
+	if mode == PlayModeLive {
+		existingSession := s.GetSessionByDeviceId(deviceId, PlayModeLive)
+		if existingSession != nil {
+			// 检查 ZLM 流是否真的存在
+			if s.isStreamActive(existingSession.StreamId) {
+				log.Info().
+					Str("device_id", deviceId).
+					Str("existing_stream_id", existingSession.StreamId).
+					Str("new_channel_id", channelId).
+					Bool("bye_sent", existingSession.ByeSent).
+					Msg("设备已有活跃实时流，复用现有流地址（不发送BYE）")
+				return s.buildPlayResult(existingSession), nil
+			}
+			// 流已断开，清理旧会话后再创建新会话
+			// cleanupSession 会检查 ByeSent 并发送 BYE（如果 BYE 未发送）
+			log.Warn().
+				Str("device_id", deviceId).
+				Str("existing_stream_id", existingSession.StreamId).
+				Bool("bye_sent", existingSession.ByeSent).
+				Msg("设备已有会话但流已断开，先发送BYE清理旧会话再重新建立")
+			s.cleanupSession(existingSession.StreamId)
+		}
+	}
+
 	streamId := s.generateStreamId(deviceId, channelId, mode, rangeStart, rangeEnd)
 
 	s.mu.RLock()
@@ -149,11 +186,18 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		s.mu.RUnlock()
 		// 检查 ZLM 流是否真的存在（避免返回已断开的会话）
 		if s.isStreamActive(streamId) {
-			log.Info().Str("stream_id", streamId).Msg("会话已存在且流活跃，复用会话")
+			log.Info().
+				Str("stream_id", streamId).
+				Bool("bye_sent", session.ByeSent).
+				Msg("会话已存在且流活跃，复用会话（不发送BYE）")
 			return s.buildPlayResult(session), nil
 		}
 		// 流已断开，清理旧会话
-		log.Warn().Str("stream_id", streamId).Msg("会话存在但流已断开，重新建立")
+		// cleanupSession 会检查 ByeSent 并发送 BYE（如果 BYE 未发送）
+		log.Warn().
+			Str("stream_id", streamId).
+			Bool("bye_sent", session.ByeSent).
+			Msg("会话存在但流已断开，先发送BYE清理旧会话再重新建立")
 		s.cleanupSession(streamId)
 	} else {
 		s.mu.RUnlock()
@@ -275,15 +319,10 @@ func (s *PlayService) isStreamActive(streamId string) bool {
 		return false
 	}
 
-	// 方法1：查询 RTP 信息
+	// 使用 GetRtpInfo 检查 GB28181 RTP 流是否存在
+	// 这是检测 GB28181 流的正确方式
 	rtpInfo, err := s.zlm.GetRtpInfo(streamId)
-	if err == nil && rtpInfo.Code == 0 {
-		return true
-	}
-
-	// 方法2：查询媒体列表
-	mediaList, err := s.zlm.GetMediaList("rtp", streamId)
-	if err == nil && mediaList.Code == 0 && len(mediaList.Data) > 0 {
+	if err == nil && rtpInfo.Code == 0 && rtpInfo.Exist {
 		return true
 	}
 
@@ -291,6 +330,7 @@ func (s *PlayService) isStreamActive(streamId string) bool {
 }
 
 // cleanupSession 清理旧会话资源
+// 如果 ByeSent=false，先发送 BYE 再清理
 func (s *PlayService) cleanupSession(streamId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,6 +338,15 @@ func (s *PlayService) cleanupSession(streamId string) {
 	session, exists := s.sessions[streamId]
 	if !exists {
 		return
+	}
+
+	// 如果 BYE 未发送，先发送 BYE 通知设备停止推流
+	if !session.ByeSent {
+		log.Info().Str("stream_id", streamId).Msg("旧会话 BYE 未发送，先发送 BYE 再清理")
+		if err := s.sendBye(session); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("清理旧会话时发送 BYE 失败")
+		}
+		session.ByeSent = true
 	}
 
 	// 释放 SSRC
@@ -313,10 +362,10 @@ func (s *PlayService) cleanupSession(streamId string) {
 	// 删除会话
 	delete(s.sessions, streamId)
 
-	log.Info().Str("stream_id", streamId).Msg("清理旧会话")
+	log.Info().Str("stream_id", streamId).Msg("清理旧会话完成")
 }
 
-// Stop 停止播放
+// Stop 停止播放（用户主动停止）
 func (s *PlayService) Stop(streamId string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -326,8 +375,16 @@ func (s *PlayService) Stop(streamId string) error {
 		return fmt.Errorf("会话不存在: %s", streamId)
 	}
 
-	if err := s.sendBye(session); err != nil {
-		log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 BYE 失败")
+	// 标记为用户主动停止，防止自动重连
+	session.UserStopped = true
+	session.RetryCount = 3 // 设置为最大重连次数，防止 CheckStreamHealth 触发重连
+
+	// 如果 BYE 未发送，先发送 BYE
+	if !session.ByeSent {
+		if err := s.sendBye(session); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 BYE 失败")
+		}
+		session.ByeSent = true
 	}
 
 	if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
@@ -342,7 +399,7 @@ func (s *PlayService) Stop(streamId string) error {
 	session.Status = PlayStatusStopped
 	delete(s.sessions, streamId)
 
-	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Msg("停止播放")
+	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Bool("user_stopped", true).Msg("用户主动停止播放")
 	return nil
 }
 
@@ -372,19 +429,480 @@ func (s *PlayService) monitorStreamRegistration(streamId string) {
 // NotifyStreamRegistered 通知流注册成功
 // 由 on_stream_changed hook 调用
 func (s *PlayService) NotifyStreamRegistered(streamId string) {
-	s.mu.RLock()
+	s.mu.Lock()
 	session, exists := s.sessions[streamId]
-	s.mu.RUnlock()
-
-	if exists && session.streamRegistered != nil {
-		select {
-		case session.streamRegistered <- true:
-			log.Debug().Str("stream_id", streamId).Msg("已发送流注册通知")
-		default:
-			// channel 已满，说明通知已发送或超时检测已退出
-			log.Debug().Str("stream_id", streamId).Msg("流注册通知 channel 已满")
+	if exists {
+		// 更新流最后活跃时间
+		session.LastActiveTime = time.Now()
+		if session.streamRegistered != nil {
+			select {
+			case session.streamRegistered <- true:
+				log.Debug().Str("stream_id", streamId).Msg("已发送流注册通知")
+			default:
+				// channel 已满，说明通知已发送或超时检测已退出
+				log.Debug().Str("stream_id", streamId).Msg("流注册通知 channel 已满")
+			}
 		}
 	}
+	s.mu.Unlock()
+}
+
+// UpdateStreamActiveTime 更新流最后活跃时间
+// 由 on_stream_changed hook 在流持续活跃时调用
+func (s *PlayService) UpdateStreamActiveTime(streamId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, exists := s.sessions[streamId]
+	if exists {
+		session.LastActiveTime = time.Now()
+		log.Debug().Str("stream_id", streamId).Msg("更新流活跃时间")
+	}
+}
+
+// ClearStreamActiveTime 清除流活跃时间
+// 由 on_stream_changed hook 在流注销时调用，用于触发断流检测
+func (s *PlayService) ClearStreamActiveTime(streamId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, exists := s.sessions[streamId]
+	if exists {
+		// 清除活跃时间，让 CheckStreamHealth 能检测到断流
+		session.LastActiveTime = time.Time{}
+		log.Info().Str("stream_id", streamId).Msg("清除流活跃时间，等待健康检查")
+	}
+}
+
+// UpdateReaderCount 更新流观看人数
+// 由 on_stream_changed hook 在流状态变化时调用
+func (s *PlayService) UpdateReaderCount(streamId string, readerCount int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, exists := s.sessions[streamId]
+	if exists {
+		session.ReaderCount = readerCount
+		log.Debug().Str("stream_id", streamId).Int("reader_count", readerCount).Msg("更新流观看人数")
+	}
+}
+
+// OnStreamDisconnected 流断开通知
+// 由 on_stream_changed hook 在收到 regist=false 且 alive_second > 10 时调用
+// 等待3秒后检查流是否恢复，未恢复则触发重连
+func (s *PlayService) OnStreamDisconnected(streamId string) {
+	// 使用写锁来原子性地检查和设置标记
+	s.mu.Lock()
+	session, exists := s.sessions[streamId]
+	if !exists {
+		s.mu.Unlock()
+		return
+	}
+
+	// 如果用户主动停止，不触发重连
+	if session.UserStopped {
+		s.mu.Unlock()
+		log.Debug().Str("stream_id", streamId).Msg("用户主动停止，不触发断流检测")
+		return
+	}
+
+	// 如果已经在重连中，跳过
+	if session.IsReconnecting {
+		s.mu.Unlock()
+		log.Debug().Str("stream_id", streamId).Msg("已在重连中，跳过")
+		return
+	}
+
+	// 如果已经在等待断流检测结果，跳过（防止重复启动检测）
+	if session.DisconnectDetecting {
+		s.mu.Unlock()
+		log.Debug().Str("stream_id", streamId).Msg("已在等待断流检测结果，跳过重复触发")
+		return
+	}
+
+	// 记录当前会话的 CallID（用于后续验证是否是同一个会话）
+	originalCallID := session.CallID
+
+	// 设置断流检测标记
+	session.DisconnectDetecting = true
+	s.mu.Unlock()
+
+	log.Info().Str("stream_id", streamId).Str("call_id", originalCallID).Msg("收到断流通知，启动断流检测")
+
+	// 异步启动断流检测流程
+	go func() {
+		// 等待3秒，看流是否恢复
+		time.Sleep(3 * time.Second)
+
+		// 再次检查流是否活跃
+		if s.isStreamActive(streamId) {
+			log.Info().Str("stream_id", streamId).Msg("流已恢复，取消重连")
+			s.UpdateStreamActiveTime(streamId)
+			// 清除断流检测标记（只有同一个会话才清除）
+			s.mu.Lock()
+			if session, exists := s.sessions[streamId]; exists && session.CallID == originalCallID {
+				session.DisconnectDetecting = false
+			}
+			s.mu.Unlock()
+			return
+		}
+
+		// 流未恢复，再次检查会话状态（可能已被其他流程处理）
+		s.mu.Lock()
+		session, exists = s.sessions[streamId]
+		var deviceId, channelId string
+		var mode PlayMode
+		var retryCount int
+		var isReconnecting bool
+		var userStopped bool
+		var currentCallID string
+		if exists {
+			currentCallID = session.CallID
+			deviceId = session.DeviceId
+			channelId = session.ChannelId
+			mode = session.Mode
+			retryCount = session.RetryCount
+			isReconnecting = session.IsReconnecting
+			userStopped = session.UserStopped
+			// 清除断流检测标记（只有同一个会话才清除）
+			if session.CallID == originalCallID {
+				session.DisconnectDetecting = false
+			}
+		}
+		s.mu.Unlock()
+
+		if !exists {
+			return
+		}
+
+		// 关键检查：验证是否是同一个会话
+		// 如果会话已被重建（重连成功），CallID 会变化，此时不应触发重连
+		if currentCallID != originalCallID {
+			log.Debug().
+				Str("stream_id", streamId).
+				Str("original_call_id", originalCallID).
+				Str("current_call_id", currentCallID).
+				Msg("会话已重建，跳过旧会话的重连触发")
+			return
+		}
+
+		// 如果用户主动停止或已在重连中，跳过
+		if userStopped {
+			log.Debug().Str("stream_id", streamId).Msg("用户主动停止，取消重连")
+			return
+		}
+		if isReconnecting {
+			log.Debug().Str("stream_id", streamId).Msg("已在重连中，取消重复触发")
+			return
+		}
+
+		log.Warn().
+			Str("stream_id", streamId).
+			Int("retry_count", retryCount).
+			Msg("流断开3秒未恢复，触发重连")
+
+		// 启动重连流程
+		s.startReconnectProcess(streamId, deviceId, channelId, mode, retryCount)
+	}()
+}
+
+// CheckStreamHealth 检查所有会话的流健康状态
+// 只更新活跃时间，断流检测由 on_stream_changed webhook 驱动
+// 如果流长时间不存在（超过30秒），清理会话资源
+func (s *PlayService) CheckStreamHealth(timeout time.Duration) {
+	s.mu.RLock()
+	// 复制会话列表，避免在检查期间持有锁
+	sessionsCopy := make([]struct {
+		streamId       string
+		lastActiveTime time.Time
+		startTime      time.Time
+		status         string
+		userStopped    bool
+		retryCount     int
+		isReconnecting bool
+		deviceId       string
+		channelId      string
+		mode           PlayMode
+	}, 0, len(s.sessions))
+
+	for streamId, session := range s.sessions {
+		sessionsCopy = append(sessionsCopy, struct {
+			streamId       string
+			lastActiveTime time.Time
+			startTime      time.Time
+			status         string
+			userStopped    bool
+			retryCount     int
+			isReconnecting bool
+			deviceId       string
+			channelId      string
+			mode           PlayMode
+		}{
+			streamId:       streamId,
+			lastActiveTime: session.LastActiveTime,
+			startTime:      session.StartTime,
+			status:         session.Status,
+			userStopped:    session.UserStopped,
+			retryCount:     session.RetryCount,
+			isReconnecting: session.IsReconnecting,
+			deviceId:       session.DeviceId,
+			channelId:      session.ChannelId,
+			mode:           session.Mode,
+		})
+	}
+	s.mu.RUnlock()
+
+	now := time.Now()
+	for _, item := range sessionsCopy {
+		// 只检查 playing 状态的会话
+		if item.status != PlayStatusPlaying {
+			continue
+		}
+
+		// 如果用户主动停止，跳过健康检查
+		if item.userStopped {
+			continue
+		}
+
+		// 如果正在重连中，跳过（由重连逻辑处理）
+		if item.isReconnecting {
+			continue
+		}
+
+		// 通过 ZLM API 检查流是否真的存在
+		if s.isStreamActive(item.streamId) {
+			// 流存在，更新活跃时间
+			s.UpdateStreamActiveTime(item.streamId)
+			continue
+		}
+
+		// 流不存在，检查是否需要触发断流检测
+		// 如果会话刚开始（10秒内），可能是正常的推流流程，跳过
+		sessionAge := now.Sub(item.startTime)
+		if sessionAge < 10*time.Second {
+			continue
+		}
+
+		// 如果 LastActiveTime 为零值，说明流还未注册，跳过
+		if item.lastActiveTime.IsZero() {
+			continue
+		}
+
+		// 流不存在超过3秒，触发断流检测流程（作为 webhook 的兜底机制）
+		inactiveDuration := now.Sub(item.lastActiveTime)
+		reconnectTimeout := 3 * time.Second
+		if inactiveDuration > reconnectTimeout {
+			log.Warn().
+				Str("stream_id", item.streamId).
+				Dur("inactive_duration", inactiveDuration).
+				Dur("reconnect_timeout", reconnectTimeout).
+				Int("retry_count", item.retryCount).
+				Msg("流不存在超过3秒，触发断流检测流程")
+
+			// 触发断流检测流程（webhook 可能没有触发，这里作为兜底）
+			go s.OnStreamDisconnected(item.streamId)
+		}
+	}
+}
+
+// CheckReconnectStatus 检查重连恢复状态
+// 每秒调用一次，检查正在重连的会话是否已恢复
+// 如果10秒内恢复，重置 RetryCount；否则继续下一次重连或清理
+func (s *PlayService) CheckReconnectStatus() {
+	s.mu.RLock()
+	// 复制正在重连的会话列表
+	reconnectingSessions := make([]struct {
+		streamId       string
+		deviceId       string
+		channelId      string
+		mode           PlayMode
+		retryCount     int
+		isReconnecting bool
+		lastRetryTime  time.Time
+		lastActiveTime time.Time
+		status         string
+		rangeStart     *time.Time
+		rangeEnd       *time.Time
+	}, 0, len(s.sessions))
+
+	for streamId, session := range s.sessions {
+		if session.IsReconnecting {
+			reconnectingSessions = append(reconnectingSessions, struct {
+				streamId       string
+				deviceId       string
+				channelId      string
+				mode           PlayMode
+				retryCount     int
+				isReconnecting bool
+				lastRetryTime  time.Time
+				lastActiveTime time.Time
+				status         string
+				rangeStart     *time.Time
+				rangeEnd       *time.Time
+			}{
+				streamId:       streamId,
+				deviceId:       session.DeviceId,
+				channelId:      session.ChannelId,
+				mode:           session.Mode,
+				retryCount:     session.RetryCount,
+				isReconnecting: session.IsReconnecting,
+				lastRetryTime:  session.LastRetryTime,
+				lastActiveTime: session.LastActiveTime,
+				status:         session.Status,
+				rangeStart:     session.RangeStart,
+				rangeEnd:       session.RangeEnd,
+			})
+		}
+	}
+	s.mu.RUnlock()
+
+	now := time.Now()
+	for _, item := range reconnectingSessions {
+		// 检查流是否已恢复（LastActiveTime 在重连后有更新）
+		s.mu.RLock()
+		session, exists := s.sessions[item.streamId]
+		s.mu.RUnlock()
+
+		if !exists {
+			// 会话已被删除（可能已成功重连并创建了新会话）
+			log.Debug().Str("stream_id", item.streamId).Msg("重连会话已不存在，可能已成功重连")
+			continue
+		}
+
+		// 检查是否恢复：流状态为 playing 且 LastActiveTime 在重连后有更新
+		reconnectDuration := now.Sub(item.lastRetryTime)
+		if session.Status == PlayStatusPlaying && !session.LastActiveTime.IsZero() && session.LastActiveTime.After(item.lastRetryTime) {
+			// 流已恢复，重置重连状态
+			s.mu.Lock()
+			session.IsReconnecting = false
+			session.RetryCount = 0              // 重置重连计数
+			session.DisconnectDetecting = false // 清除断流检测标记
+			s.mu.Unlock()
+			log.Info().
+				Str("stream_id", item.streamId).
+				Dur("reconnect_duration", reconnectDuration).
+				Msg("重连成功，流已恢复，重置重连计数")
+			continue
+		}
+
+		// 检查是否超过10秒等待时间
+		if reconnectDuration > 10*time.Second {
+			log.Warn().
+				Str("stream_id", item.streamId).
+				Dur("reconnect_duration", reconnectDuration).
+				Int("retry_count", item.retryCount).
+				Msg("重连等待超时(10秒)，流未恢复")
+
+			// 清理重连状态
+			s.mu.Lock()
+			session.IsReconnecting = false
+			s.mu.Unlock()
+
+			// 如果未达到最大重连次数，触发下一次重连
+			if item.retryCount < 3 {
+				log.Info().
+					Str("stream_id", item.streamId).
+					Int("retry_count", item.retryCount).
+					Msg("触发下一次重连尝试")
+				go s.startReconnectProcess(item.streamId, item.deviceId, item.channelId, item.mode, item.retryCount)
+			} else {
+				// 已达最大重连次数，清理会话
+				log.Warn().
+					Str("stream_id", item.streamId).
+					Int("retry_count", item.retryCount).
+					Msg("达到最大重连次数(3次)，清理会话")
+				if err := s.StopWithBye(item.streamId); err != nil {
+					log.Error().Err(err).Str("stream_id", item.streamId).Msg("清理重连失败会话出错")
+				}
+			}
+		} else {
+			// 还在等待中
+			log.Debug().
+				Str("stream_id", item.streamId).
+				Dur("reconnect_duration", reconnectDuration).
+				Dur("remaining", 10*time.Second-reconnectDuration).
+				Msg("等待重连恢复中")
+		}
+	}
+}
+
+// StopWithBye 停止播放并发送 BYE（用于自动断流场景，如健康检查）
+// 与 Stop 方法的区别：不设置 UserStopped，允许 CheckStreamHealth 判断是否需要重连
+func (s *PlayService) StopWithBye(streamId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, exists := s.sessions[streamId]
+	if !exists {
+		log.Debug().Str("stream_id", streamId).Msg("会话不存在，跳过 BYE 发送")
+		return nil
+	}
+
+	// 不设置 UserStopped（保持 false），不修改 RetryCount
+	// 这样 CheckStreamHealth 可以判断是否需要重连
+
+	// 发送 BYE 给设备
+	if err := s.sendBye(session); err != nil {
+		log.Warn().Err(err).Str("stream_id", streamId).Msg("发送 BYE 失败")
+		// 即使 BYE 发送失败，也继续清理本地资源
+	}
+
+	// 关闭 RTP Server
+	if s.zlm != nil {
+		if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("关闭 RTP 服务器失败")
+		}
+	}
+
+	// 释放 SSRC
+	if s.ssrcService != nil && session.SSRC != "" {
+		s.ssrcService.ReleaseSsrc(session.SSRC)
+	}
+
+	session.Status = PlayStatusStopped
+	delete(s.sessions, streamId)
+
+	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Bool("user_stopped", session.UserStopped).Msg("自动断流，已发送 BYE 并清理会话")
+	return nil
+}
+
+// ForceStop 强制停止播放（不触发重连，用于服务端关闭等场景）
+func (s *PlayService) ForceStop(streamId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, exists := s.sessions[streamId]
+	if !exists {
+		return fmt.Errorf("会话不存在: %s", streamId)
+	}
+
+	// 标记为用户停止，防止重连
+	session.UserStopped = true
+	session.RetryCount = 3
+
+	// 发送 BYE
+	if session.Status == PlayStatusPlaying && !session.ByeSent {
+		if err := s.sendBye(session); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("强制停止时发送 BYE 失败")
+		}
+		session.ByeSent = true
+	}
+
+	// 关闭 RTP Server
+	if s.zlm != nil {
+		s.zlm.CloseRtpServer(streamId)
+	}
+
+	// 释放 SSRC
+	if s.ssrcService != nil && session.SSRC != "" {
+		s.ssrcService.ReleaseSsrc(session.SSRC)
+	}
+
+	session.Status = PlayStatusStopped
+	delete(s.sessions, streamId)
+
+	log.Info().Str("stream_id", streamId).Msg("强制停止播放")
+	return nil
 }
 
 // GetSession 获取会话
@@ -898,6 +1416,54 @@ func (s *PlayService) OnInviteResponse(streamId string, resp *sip.Response) {
 	log.Warn().Str("stream_id", streamId).Int("status", int(resp.StatusCode)).Msg("播放失败")
 }
 
+// StopAllSessions 停止所有活跃会话（服务端优雅关闭）
+// 遍历所有活跃会话，发送 BYE 请求，关闭 RTP Server，释放 SSRC
+func (s *PlayService) StopAllSessions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.sessions) == 0 {
+		log.Info().Msg("没有活跃的播放会话需要关闭")
+		return
+	}
+
+	log.Info().Int("session_count", len(s.sessions)).Msg("正在关闭所有播放会话")
+
+	// 遍历所有活跃会话
+	for streamId, session := range s.sessions {
+		// 发送 BYE 请求
+		if session.Status == PlayStatusPlaying {
+			if err := s.sendBye(session); err != nil {
+				log.Warn().Err(err).Str("stream_id", streamId).Str("device_id", session.DeviceId).Msg("发送 BYE 失败")
+			} else {
+				log.Debug().Str("stream_id", streamId).Str("device_id", session.DeviceId).Msg("BYE 已发送")
+			}
+		}
+
+		// 关闭 RTP Server
+		if s.zlm != nil {
+			if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
+				log.Warn().Err(err).Str("stream_id", streamId).Msg("关闭 RTP Server 失败")
+			}
+		}
+
+		// 释放 SSRC
+		if s.ssrcService != nil && session.SSRC != "" {
+			s.ssrcService.ReleaseSsrc(session.SSRC)
+		}
+
+		// 标记会话状态为已停止
+		session.Status = PlayStatusStopped
+
+		log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Msg("会话已关闭")
+	}
+
+	// 清空 sessions map
+	s.sessions = make(map[string]*PlaySession)
+
+	log.Info().Msg("所有播放会话已关闭")
+}
+
 // CleanupStaleSessions 清理过期会话
 func (s *PlayService) CleanupStaleSessions(timeout time.Duration) {
 	s.mu.Lock()
@@ -933,6 +1499,21 @@ func (s *PlayService) GetSessionByStreamId(streamId string) *PlaySession {
 		return nil
 	}
 	return session
+}
+
+// GetSessionByDeviceId 根据设备ID和播放模式查找活跃会话
+// 用于设备单流限制与流复用：同一设备只能有一路实时流
+func (s *PlayService) GetSessionByDeviceId(deviceId string, mode PlayMode) *PlaySession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, session := range s.sessions {
+		// 匹配设备ID和播放模式，且会话状态为 playing
+		if session.DeviceId == deviceId && session.Mode == mode && session.Status == PlayStatusPlaying {
+			return session
+		}
+	}
+	return nil
 }
 
 // RemoveSessionByStreamID 按 StreamID 移除会话
@@ -990,4 +1571,196 @@ func (s *PlayService) OnMediaStatusReceived(streamId string) error {
 
 	log.Info().Str("device_id", session.DeviceId).Str("stream_id", streamId).Msg("录像结束，已清理会话")
 	return nil
+}
+
+// ReconnectSession 手动触发会话重连（供 HTTP API 调用）
+// 返回新的流 ID 和播放结果
+func (s *PlayService) ReconnectSession(streamId string) (*PlayResult, error) {
+	s.mu.RLock()
+	session, exists := s.sessions[streamId]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("会话不存在: %s", streamId)
+	}
+
+	// 检查是否可以重连
+	if session.UserStopped {
+		return nil, fmt.Errorf("用户已主动停止，无法重连")
+	}
+	if session.IsReconnecting {
+		return nil, fmt.Errorf("正在重连中，请等待")
+	}
+	if session.RetryCount >= 3 {
+		return nil, fmt.Errorf("已达到最大重连次数(3次)，无法重连")
+	}
+
+	log.Info().
+		Str("stream_id", streamId).
+		Str("device_id", session.DeviceId).
+		Str("channel_id", session.ChannelId).
+		Int("retry_count", session.RetryCount).
+		Msg("手动触发重连")
+
+	// 直接调用内部重连流程
+	s.startReconnectProcess(streamId, session.DeviceId, session.ChannelId, session.Mode, session.RetryCount)
+
+	// 查找新会话
+	s.mu.RLock()
+	var newSession *PlaySession
+	for _, ns := range s.sessions {
+		if ns.DeviceId == session.DeviceId && ns.ChannelId == session.ChannelId && ns.Mode == session.Mode {
+			newSession = ns
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if newSession == nil {
+		return nil, fmt.Errorf("重连失败：未找到新会话")
+	}
+
+	return s.buildPlayResult(newSession), nil
+}
+
+// startReconnectProcess 启动重连流程
+// 检查重连条件，清理旧会话，重新建立流
+func (s *PlayService) startReconnectProcess(streamId, deviceId, channelId string, mode PlayMode, currentRetryCount int) {
+	// 检查重连次数限制
+	if currentRetryCount >= 3 {
+		log.Warn().
+			Str("stream_id", streamId).
+			Int("retry_count", currentRetryCount).
+			Msg("超过最大重连次数(3次)，清理会话")
+		// 超过重连次数，清理会话
+		if err := s.StopWithBye(streamId); err != nil {
+			log.Error().Err(err).Str("stream_id", streamId).Msg("清理超时会话失败")
+		}
+		return
+	}
+
+	s.mu.Lock()
+	session, exists := s.sessions[streamId]
+	if !exists {
+		s.mu.Unlock()
+		log.Warn().Str("stream_id", streamId).Msg("重连时会话已不存在")
+		return
+	}
+
+	// 再次检查条件（防止并发问题）
+	if session.UserStopped || session.RetryCount >= 3 || session.IsReconnecting {
+		s.mu.Unlock()
+		log.Debug().
+			Str("stream_id", streamId).
+			Bool("user_stopped", session.UserStopped).
+			Int("retry_count", session.RetryCount).
+			Bool("is_reconnecting", session.IsReconnecting).
+			Msg("重连条件不满足，放弃重连")
+		return
+	}
+
+	// 获取回放时间范围（用于重连回放流）
+	rangeStart := session.RangeStart
+	rangeEnd := session.RangeEnd
+
+	// 更新重连状态
+	session.IsReconnecting = true
+	session.RetryCount++
+	session.LastRetryTime = time.Now()
+	s.mu.Unlock()
+
+	log.Info().
+		Str("stream_id", streamId).
+		Str("device_id", deviceId).
+		Str("channel_id", channelId).
+		Int("retry_count", session.RetryCount).
+		Str("mode", string(mode)).
+		Msg("开始自动重连")
+
+	// 清理旧会话的资源（发送 BYE、关闭 RTP、释放 SSRC）
+	s.cleanupForReconnect(streamId, session)
+
+	// 删除旧会话记录
+	s.mu.Lock()
+	delete(s.sessions, streamId)
+	s.mu.Unlock()
+
+	// 等待2秒后重新INVITE（给设备准备时间）
+	log.Debug().Str("stream_id", streamId).Msg("等待2秒后重新INVITE")
+	time.Sleep(2 * time.Second)
+
+	// 重新建立流
+	var err error
+	switch mode {
+	case PlayModeLive:
+		_, err = s.Play(deviceId, channelId)
+	case PlayModePlayback:
+		if rangeStart != nil && rangeEnd != nil {
+			_, err = s.PlayBack(deviceId, channelId, *rangeStart, *rangeEnd)
+		} else {
+			err = fmt.Errorf("回放模式缺少时间范围参数")
+		}
+	case PlayModeDownload:
+		if rangeStart != nil && rangeEnd != nil {
+			_, err = s.Download(deviceId, channelId, *rangeStart, *rangeEnd, 1)
+		} else {
+			err = fmt.Errorf("下载模式缺少时间范围参数")
+		}
+	default:
+		err = fmt.Errorf("未知的播放模式: %s", mode)
+	}
+
+	// 更新新会话的重连状态
+	s.mu.Lock()
+	for newStreamId, newSession := range s.sessions {
+		if newSession.DeviceId == deviceId && newSession.ChannelId == channelId && newSession.Mode == mode {
+			// 继承重连计数
+			newSession.RetryCount = session.RetryCount
+			newSession.IsReconnecting = false
+			newSession.DisconnectDetecting = false // 确保新会话的断流检测标记清除
+			log.Info().
+				Str("old_stream_id", streamId).
+				Str("new_stream_id", newStreamId).
+				Int("retry_count", newSession.RetryCount).
+				Bool("success", err == nil).
+				Msg("自动重连完成")
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		log.Error().Err(err).
+			Str("stream_id", streamId).
+			Str("device_id", deviceId).
+			Str("channel_id", channelId).
+			Int("retry_count", session.RetryCount).
+			Msg("自动重连失败")
+	}
+}
+
+// cleanupForReconnect 为重连清理旧会话资源
+// 只清理资源，不删除会话记录
+func (s *PlayService) cleanupForReconnect(streamId string, session *PlaySession) {
+	// 发送 BYE（如果尚未发送）
+	if !session.ByeSent {
+		if err := s.sendBye(session); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("重连前发送 BYE 失败")
+		}
+		session.ByeSent = true
+	}
+
+	// 关闭 RTP Server
+	if s.zlm != nil {
+		if _, err := s.zlm.CloseRtpServer(streamId); err != nil {
+			log.Warn().Err(err).Str("stream_id", streamId).Msg("重连前关闭 RTP Server 失败")
+		}
+	}
+
+	// 释放 SSRC
+	if s.ssrcService != nil && session.SSRC != "" {
+		s.ssrcService.ReleaseSsrc(session.SSRC)
+	}
+
+	log.Debug().Str("stream_id", streamId).Msg("重连资源清理完成")
 }
