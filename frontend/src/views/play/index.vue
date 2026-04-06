@@ -176,10 +176,14 @@
         <div class="tw-aspect-video tw-bg-black tw-rounded tw-overflow-hidden tw-relative">
           <JessibucaPlayer
             v-if="currentStream?.flv_url"
+            ref="playerRef"
             :url="currentStream.flv_url"
             :mode="currentStream.mode"
+            :video-decoder="currentDecoder"
+            :show-controls="true"
             @playing="onPlaying"
             @error="onPlayError"
+            @decoderchange="onDecoderChange"
             class="tw-w-full tw-h-full"
           />
           <div v-else class="tw-w-full tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
@@ -294,9 +298,11 @@ import {
   type ProgressResponse,
 } from '@/api/download'
 import PTZControl from '@/components/PTZControl.vue'
-import JessibucaPlayer from '@/components/JessibucaPlayer.vue'
+import JessibucaPlayer, { type VideoDecoderType } from '@/components/JessibucaPlayer.vue'
 
 const route = useRoute()
+const playerRef = ref<any>(null)
+const currentDecoder = ref<VideoDecoderType>('wasm')
 
 const playMode = ref<PlayMode>('live')
 const deviceId = ref('')
@@ -513,6 +519,11 @@ function onPlayError(error: Error) {
   console.error('播放错误:', error)
   ElMessage.error('播放失败: ' + error.message)
   playing.value = false
+}
+
+function onDecoderChange(decoder: VideoDecoderType) {
+  currentDecoder.value = decoder
+  console.log('解码器切换:', decoder)
 }
 
 async function stopPlay() {
