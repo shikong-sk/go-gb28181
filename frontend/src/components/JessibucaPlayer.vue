@@ -1,11 +1,41 @@
 <template>
-  <div ref="containerRef" class="jessibuca-container tw-w-full tw-h-full">
+  <div ref="containerRef" class="jessibuca-container tw-w-full tw-h-full tw-relative">
+    <!-- 加载状态显示 -->
+    <div v-if="isLoading" class="loading-overlay tw-absolute tw-inset-0 tw-flex tw-items-center tw-justify-center tw-bg-gray-900 tw-z-10">
+      <div class="tw-text-center">
+        <div class="loading-spinner tw-mb-4"></div>
+        <p class="tw-text-gray-400 tw-text-sm">{{ loadingText }}</p>
+      </div>
+    </div>
+
+    <!-- 错误状态显示 -->
+    <div v-if="hasError" class="error-overlay tw-absolute tw-inset-0 tw-flex tw-items-center tw-justify-center tw-bg-gray-900 tw-z-10">
+      <div class="tw-text-center">
+        <el-icon size="48" class="tw-text-red-500 tw-mb-4"><VideoCameraFilled /></el-icon>
+        <p class="tw-text-red-400 tw-text-sm tw-mb-2">{{ errorMessage }}</p>
+        <el-button type="primary" size="small" @click="retryPlay">
+          <el-icon class="tw-mr-1"><Refresh /></el-icon>
+          重试
+        </el-button>
+      </div>
+    </div>
+
+    <!-- Canvas 播放区域 -->
     <canvas ref="canvasRef" class="tw-w-full tw-h-full"></canvas>
+
+    <!-- 播放状态指示器 -->
+    <div v-if="isPlaying && !hasError" class="playing-indicator tw-absolute tw-bottom-2 tw-right-2 tw-z-5">
+      <el-tag type="success" size="small" effect="dark">
+        <el-icon class="tw-mr-1 tw-animate-pulse"><VideoPlay /></el-icon>
+        播放中
+      </el-tag>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { VideoCameraFilled, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import type { PlayMode } from '@/api/play'
 
 // 使用预编译的 jv4 包
@@ -20,11 +50,13 @@ interface Props {
   mode: PlayMode
   autoPlay?: boolean
   muted?: boolean
+  enableAudio?: boolean  // 是否启用音频解码（PCMA 解码器 WASM 有 bug，默认关闭）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   autoPlay: true,
   muted: true,
+  enableAudio: false,  // 默认关闭音频，因为 PCMA 解码器 WASM 有 bug
 })
 
 // Emits 定义
@@ -39,6 +71,13 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 
+// 播放状态管理
+const isLoading = ref(false)
+const isPlaying = ref(false)
+const hasError = ref(false)
+const errorMessage = ref('')
+const loadingText = ref('正在初始化播放器...')
+
 // 播放器实例
 let conn: any = null
 let demuxer: any = null
@@ -49,21 +88,18 @@ let frameCount = 0
 
 // 初始化播放器
 async function initPlayer() {
-  try {
-    console.log('[Jessibuca] 开始初始化播放器')
-    console.log('[Jessibuca] canvasRef:', canvasRef)
-    console.log('[Jessibuca] canvasRef.value:', canvasRef?.value)
+  isLoading.value = true
+  loadingText.value = '正在初始化播放器...'
+  hasError.value = false
+  errorMessage.value = ''
 
+  try {
     // 等待DOM渲染完成
     await new Promise(resolve => setTimeout(resolve, 100))
 
     if (!canvasRef || !canvasRef.value) {
-      const error = new Error('播放器canvas未找到，请检查DOM渲染')
-      console.error('[Jessibuca]', error)
-      throw error
+      throw new Error('播放器canvas未找到，请检查DOM渲染')
     }
-
-    console.log('[Jessibuca] Canvas元素已找到')
 
     const canvas = canvasRef.value
     const parent = canvas.parentElement
@@ -75,7 +111,7 @@ async function initPlayer() {
       canvas.height = 480
     }
 
-    console.log('[Jessibuca] Canvas尺寸:', canvas.width, 'x', canvas.height)
+    loadingText.value = '正在加载解码器...'
 
     // 创建渲染器
     renderer = new CanvasRenderer(canvas)
@@ -85,7 +121,7 @@ async function initPlayer() {
       yuvMode: false,
       canvas,
       workerMode: false,
-      wasmPath: '/videodec_simd.wasm', // 从public目录加载
+      wasmPath: '/videodec_simd.wasm',
     })
 
     // 初始化视频解码器
@@ -106,18 +142,23 @@ async function initPlayer() {
       }
       frameCount++
       if (frameCount === 5) {
+        isLoading.value = false
+        isPlaying.value = true
         emit('playing')
-        console.log('播放成功')
       }
     })
 
     videoDecoder.on('error', (error: any) => {
       console.error('[VideoDecoder Error]', error)
+      hasError.value = true
+      errorMessage.value = error.errMsg || '视频解码错误'
+      isLoading.value = false
+      isPlaying.value = false
       emit('error', new Error(error.errMsg || String(error)))
     })
 
+    isLoading.value = false
     emit('ready')
-    console.log('播放器初始化成功')
 
     // 自动播放
     if (props.autoPlay && props.url) {
@@ -125,6 +166,9 @@ async function initPlayer() {
     }
   } catch (error) {
     console.error('播放器初始化失败:', error)
+    hasError.value = true
+    errorMessage.value = error instanceof Error ? error.message : '播放器初始化失败'
+    isLoading.value = false
     emit('error', error instanceof Error ? error : new Error(String(error)))
   }
 }
@@ -132,31 +176,32 @@ async function initPlayer() {
 // 播放
 async function play(url: string) {
   if (!videoDecoder || !audioDecoder) {
-    const error = new Error('播放器未初始化')
-    console.error('[Jessibuca]', error)
-    emit('error', error)
+    hasError.value = true
+    errorMessage.value = '播放器未初始化'
+    emit('error', new Error('播放器未初始化'))
     return
   }
 
   if (!url) {
-    const error = new Error('播放URL为空')
-    console.error('[Jessibuca]', error)
-    emit('error', error)
+    hasError.value = true
+    errorMessage.value = '播放URL为空'
+    emit('error', new Error('播放URL为空'))
     return
   }
 
+  isLoading.value = true
+  loadingText.value = '正在连接视频流...'
+  hasError.value = false
+  isPlaying.value = false
+
   try {
-    console.log('[Jessibuca] 开始播放:', url)
     frameCount = 0
 
     // 根据URL类型创建连接
     let urlType: string
     try {
       urlType = getURLType(url)
-      console.log('[Jessibuca] URL类型:', urlType)
     } catch (e) {
-      console.error('[Jessibuca] URL类型判断失败:', e)
-      // 默认使用HTTP
       urlType = 'http'
     }
 
@@ -166,20 +211,28 @@ async function play(url: string) {
       conn = new HttpConnection(url)
     }
 
-    // 创建FLV解复用器
+    // 关键顺序：先创建demuxer（PUSH模式会设置conn.oput），再connect
     const mode = props.mode === 'live' ? DemuxMode.PUSH : DemuxMode.PULL
-    demuxer = new FlvDemuxer(conn, mode)
+    // 重要：使用 'avcc' 格式而不是 'annexb'，避免 videoDecoderConfig 未设置时崩溃
+    demuxer = new FlvDemuxer(conn, mode, 'avcc')
 
     // 监听视频编码配置变化
     demuxer.on(DemuxEvent.VIDEO_ENCODER_CONFIG_CHANGED, (vconfig: any) => {
-      console.log('[视频配置]', vconfig)
       videoDecoder.configure(vconfig)
     })
 
     // 监听音频编码配置变化
     demuxer.on(DemuxEvent.AUDIO_ENCODER_CONFIG_CHANGED, (aconfig: any) => {
-      console.log('[音频配置]', aconfig)
       audioDecoder.configure(aconfig)
+    })
+
+    // 监听解复用错误
+    demuxer.on(DemuxEvent.DEMUX_ERROR, (error: Error) => {
+      console.error('[Demuxer Error]', error)
+      hasError.value = true
+      errorMessage.value = error.message || '解复用错误'
+      isLoading.value = false
+      emit('error', error)
     })
 
     // 设置数据回调（PUSH模式用于实时流）
@@ -190,14 +243,22 @@ async function play(url: string) {
         }
       }
       demuxer.gotAudio = (data: any) => {
-        if (audioDecoder) {
-          audioDecoder.decode(data)
+        // PCMA 解码器 WASM 有 bug，默认禁用
+        // 可通过 enableAudio prop 启用
+        if (props.enableAudio && audioDecoder && audioDecoder.config) {
+          try {
+            audioDecoder.decode(data)
+          } catch (err) {
+            console.error('[AudioDecoder Error]', err)
+          }
         }
       }
-      await conn.connect()
-    } else {
-      // PULL模式用于文件播放
-      await conn.connect()
+    }
+
+    await conn.connect()
+
+    // PULL模式额外处理
+    if (mode === DemuxMode.PULL) {
       demuxer.videoReadable?.pipeTo(
         new WritableStream({
           write(chunk: any) {
@@ -210,8 +271,13 @@ async function play(url: string) {
       demuxer.audioReadable?.pipeTo(
         new WritableStream({
           write(chunk: any) {
-            if (audioDecoder) {
-              audioDecoder.decode(chunk)
+            // PCMA 解码器 WASM 有 bug，默认禁用
+            if (props.enableAudio && audioDecoder && audioDecoder.config) {
+              try {
+                audioDecoder.decode(chunk)
+              } catch (err) {
+                console.error('[AudioDecoder Error]', err)
+              }
             }
           },
         })
@@ -219,7 +285,19 @@ async function play(url: string) {
     }
   } catch (error) {
     console.error('播放失败:', error)
+    hasError.value = true
+    errorMessage.value = error instanceof Error ? error.message : '视频流连接失败'
+    isLoading.value = false
+    isPlaying.value = false
     emit('error', error instanceof Error ? error : new Error(String(error)))
+  }
+}
+
+// 重试播放
+async function retryPlay() {
+  if (props.url) {
+    await destroy()
+    await initPlayer()
   }
 }
 
@@ -255,6 +333,8 @@ async function destroy() {
       renderer = null
     }
     frameCount = 0
+    isLoading.value = false
+    isPlaying.value = false
   } catch (error) {
     console.error('销毁播放器失败:', error)
   }
@@ -300,5 +380,41 @@ defineExpose({
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #409EFF;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 播放状态指示器动画 */
+.playing-indicator {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 加载和错误覆盖层过渡 */
+.loading-overlay,
+.error-overlay {
+  animation: fadeIn 0.2s ease-in;
 }
 </style>

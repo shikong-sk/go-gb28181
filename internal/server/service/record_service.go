@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/model"
+	"git.skcks.cn/Shikong/go-gb28181/internal/server/repository"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/log"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/manscdp"
 	"git.skcks.cn/Shikong/go-gb28181/pkg/utils"
@@ -15,19 +17,29 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
+// DataSource 数据来源标识
+type DataSource string
+
+const (
+	DataSourceCache  DataSource = "cache"  // 来自缓存
+	DataSourceDB     DataSource = "db"     // 来自数据库（缓存已存储但标记为过期）
+	DataSourceDevice DataSource = "device" // 来自设备实时查询
+)
+
+// RecordQueryResult 录像查询结果，包含来源信息
+type RecordQueryResult struct {
+	Items     []model.RecordItem `json:"items"`
+	Source    DataSource         `json:"source"`     // 数据来源
+	CachedAt  *time.Time         `json:"cached_at"`  // 缓存时间（仅缓存数据有）
+	ExpiresAt *time.Time         `json:"expires_at"` // 过期时间（仅缓存数据有）
+	ExpiresIn int                `json:"expires_in"` // 距离过期剩余秒数（仅缓存数据有）
+	ItemCount int                `json:"item_count"` // 录像项数量
+}
+
 const recordOutputLayout = "2006-01-02 15:04:05"
 
-// RecordItem 历史录像记录
-type RecordItem struct {
-	DeviceID  string `json:"device_id"`
-	Name      string `json:"name"`
-	Address   string `json:"address"`
-	StartTime string `json:"start_time"`
-	EndTime   string `json:"end_time"`
-	Secrecy   int    `json:"secrecy"`
-	Type      string `json:"type"`
-	FileSize  int64  `json:"file_size"`
-}
+// 使用 model.RecordItem 作为录像项类型
+type RecordItem = model.RecordItem
 
 type recordQueryContext struct {
 	deviceID  string
@@ -40,30 +52,128 @@ type recordQueryContext struct {
 
 // RecordService 历史录像查询服务
 type RecordService struct {
-	client        *sipgo.Client
-	deviceService *DeviceService
-	localID       string
-	localIP       string
-	localPort     int
+	client           *sipgo.Client
+	deviceService    *DeviceService
+	cacheRepo        *repository.RecordCacheRepository // 录像缓存仓库
+	localID          string
+	localIP          string
+	localPort        int
+	cacheExpiryHours int // 缓存有效期（小时）
 
 	mu      sync.RWMutex
 	queries map[string]*recordQueryContext
 }
 
 // NewRecordService 创建历史录像查询服务
-func NewRecordService(client *sipgo.Client, deviceService *DeviceService, localID, localIP string, localPort int) *RecordService {
+func NewRecordService(client *sipgo.Client, deviceService *DeviceService, cacheRepo *repository.RecordCacheRepository, localID, localIP string, localPort int) *RecordService {
+	cacheExpiryHours := model.DefaultCacheExpiryHours
 	return &RecordService{
-		client:        client,
-		deviceService: deviceService,
-		localID:       localID,
-		localIP:       localIP,
-		localPort:     localPort,
-		queries:       make(map[string]*recordQueryContext),
+		client:           client,
+		deviceService:    deviceService,
+		cacheRepo:        cacheRepo,
+		localID:          localID,
+		localIP:          localIP,
+		localPort:        localPort,
+		cacheExpiryHours: cacheExpiryHours,
+		queries:          make(map[string]*recordQueryContext),
 	}
 }
 
-// QueryRecords 查询历史录像
-func (s *RecordService) QueryRecords(deviceID, channelID string, startTime, endTime time.Time, timeout time.Duration) ([]RecordItem, error) {
+// SetCacheExpiry 设置缓存有效期
+func (s *RecordService) SetCacheExpiry(hours int) {
+	if hours > 0 {
+		s.cacheExpiryHours = hours
+	}
+}
+
+// GetCacheRepo 获取缓存仓库（供外部查询缓存状态）
+func (s *RecordService) GetCacheRepo() *repository.RecordCacheRepository {
+	return s.cacheRepo
+}
+
+// QueryRecords 查询历史录像（缓存优先策略）
+// 参数：
+//   - deviceID: 设备ID
+//   - channelID: 通道ID
+//   - startTime: 开始时间
+//   - endTime: 结束时间
+//   - timeout: 超时时间
+//   - forceRefresh: 是否强制刷新（跳过缓存）
+func (s *RecordService) QueryRecords(deviceID, channelID string, startTime, endTime time.Time, timeout time.Duration, forceRefresh bool) (*RecordQueryResult, error) {
+	if s.client == nil {
+		return nil, fmt.Errorf("SIP 客户端未初始化")
+	}
+	if endTime.Before(startTime) {
+		return nil, fmt.Errorf("结束时间不能早于开始时间")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	// 格式化查询日期
+	queryDate := startTime.Format("2006-01-02")
+	startTimeStr := startTime.Format(recordOutputLayout)
+	endTimeStr := endTime.Format(recordOutputLayout)
+
+	// 缓存优先策略：先查缓存
+	if !forceRefresh && s.cacheRepo != nil {
+		cache, items, err := s.cacheRepo.GetValidCache(deviceID, channelID, queryDate)
+		if err != nil {
+			log.Warn().Err(err).Str("device_id", deviceID).Str("channel_id", channelID).Msg("查询缓存失败，继续回源查询")
+		} else if cache != nil && items != nil {
+			// 缓存有效，直接返回
+			log.Info().Str("device_id", deviceID).Str("channel_id", channelID).Str("query_date", queryDate).Int("count", len(items)).Msg("使用缓存数据")
+			now := time.Now()
+			expiresIn := int(cache.ExpiresAt.Sub(now).Seconds())
+			if expiresIn < 0 {
+				expiresIn = 0
+			}
+			return &RecordQueryResult{
+				Items:     items,
+				Source:    DataSourceCache,
+				CachedAt:  &cache.FetchedAt,
+				ExpiresAt: &cache.ExpiresAt,
+				ExpiresIn: expiresIn,
+				ItemCount: len(items),
+			}, nil
+		}
+	}
+
+	// 缓存不存在或过期，回源设备查询
+	log.Info().Str("device_id", deviceID).Str("channel_id", channelID).Str("query_date", queryDate).Msg("缓存无效，回源设备查询")
+
+	items, err := s.queryFromDevice(deviceID, channelID, startTime, endTime, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	// 保存到缓存
+	if s.cacheRepo != nil && len(items) > 0 {
+		if err := s.cacheRepo.SaveCache(deviceID, channelID, queryDate, startTimeStr, endTimeStr, items, s.cacheExpiryHours); err != nil {
+			log.Warn().Err(err).Str("device_id", deviceID).Str("channel_id", channelID).Msg("保存缓存失败")
+		} else {
+			log.Info().Str("device_id", deviceID).Str("channel_id", channelID).Int("count", len(items)).Msg("录像缓存已保存")
+		}
+	}
+
+	return &RecordQueryResult{
+		Items:     items,
+		Source:    DataSourceDevice,
+		ItemCount: len(items),
+	}, nil
+}
+
+// QueryRecordsSimple 简单查询（不区分来源，兼容旧接口）
+func (s *RecordService) QueryRecordsSimple(deviceID, channelID string, startTime, endTime time.Time, timeout time.Duration) ([]RecordItem, error) {
+	result, err := s.QueryRecords(deviceID, channelID, startTime, endTime, timeout, false)
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// queryFromDevice 从设备实时查询录像
+func (s *RecordService) queryFromDevice(deviceID, channelID string, startTime, endTime time.Time, timeout time.Duration) ([]RecordItem, error) {
 	if s.client == nil {
 		return nil, fmt.Errorf("SIP 客户端未初始化")
 	}

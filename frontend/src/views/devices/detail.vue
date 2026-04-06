@@ -290,6 +290,128 @@
         </div>
       </div>
 
+      <!-- 订阅管理 -->
+      <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-6 tw-mb-6">
+        <h3 class="tw-text-lg tw-font-bold tw-mb-4 tw-border-b tw-pb-2">订阅管理</h3>
+
+        <el-row :gutter="24">
+          <!-- 目录订阅 -->
+          <el-col :span="12">
+            <div class="tw-border tw-rounded-lg tw-p-4">
+              <div class="tw-flex tw-justify-between tw-items-center tw-mb-3">
+                <span class="tw-font-medium">目录订阅</span>
+                <el-tag :type="hasCatalogSubscription ? 'success' : 'info'" size="small">
+                  {{ hasCatalogSubscription ? '已订阅' : '未订阅' }}
+                </el-tag>
+              </div>
+
+              <!-- 订阅列表 -->
+              <div v-if="catalogSubscriptions.length > 0" class="tw-mb-3">
+                <el-table :data="catalogSubscriptions" size="small" v-loading="loadingCatalogSubscriptions">
+                  <el-table-column prop="sn" label="订阅SN" width="120" />
+                  <el-table-column prop="expires" label="有效期(秒)" width="100" />
+                  <el-table-column label="订阅时间">
+                    <template #default="{ row }">
+                      {{ formatTime(row.subscribed_at) }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="80">
+                    <template #default="{ row }">
+                      <el-button
+                        type="danger"
+                        size="small"
+                        link
+                        :loading="unsubscribingCatalog"
+                        @click="unsubscribeCatalog(row.sn)"
+                      >
+                        取消
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+
+              <div class="tw-flex tw-gap-2">
+                <el-button
+                  type="primary"
+                  size="small"
+                  :disabled="device?.status !== '1'"
+                  :loading="subscribingCatalog"
+                  @click="subscribeCatalog"
+                >
+                  {{ hasCatalogSubscription ? '续订' : '订阅' }}
+                </el-button>
+                <el-button
+                  v-if="hasCatalogSubscription"
+                  type="danger"
+                  size="small"
+                  :loading="unsubscribingCatalog"
+                  @click="unsubscribeCatalog()"
+                >
+                  取消全部
+                </el-button>
+              </div>
+              <p class="tw-text-xs tw-text-gray-500 tw-mt-2">
+                订阅目录后，设备会自动推送目录变更信息
+              </p>
+            </div>
+          </el-col>
+
+          <!-- 报警订阅 -->
+          <el-col :span="12">
+            <div class="tw-border tw-rounded-lg tw-p-4">
+              <div class="tw-flex tw-justify-between tw-items-center tw-mb-3">
+                <span class="tw-font-medium">报警订阅</span>
+                <el-tag :type="hasAlarmSubscription ? 'success' : 'info'" size="small">
+                  {{ hasAlarmSubscription ? '已订阅' : '未订阅' }}
+                </el-tag>
+              </div>
+
+              <!-- 订阅列表 -->
+              <div v-if="alarmSubscriptions.length > 0" class="tw-mb-3">
+                <el-table :data="alarmSubscriptions" size="small" v-loading="loadingAlarmSubscriptions">
+                  <el-table-column prop="sn" label="订阅SN" width="120" />
+                  <el-table-column prop="expires" label="有效期(秒)" width="100" />
+                  <el-table-column label="订阅时间">
+                    <template #default="{ row }">
+                      {{ formatTime(row.subscribed_at) }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="80">
+                    <template #default="{ row }">
+                      <el-button
+                        type="danger"
+                        size="small"
+                        link
+                        :loading="unsubscribingAlarm"
+                        @click="unsubscribeAlarm(row.sn)"
+                      >
+                        取消
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+
+              <div class="tw-flex tw-gap-2">
+                <el-button
+                  type="primary"
+                  size="small"
+                  :disabled="device?.status !== '1'"
+                  :loading="subscribingAlarm"
+                  @click="subscribeAlarm"
+                >
+                  {{ hasAlarmSubscription ? '续订' : '订阅' }}
+                </el-button>
+              </div>
+              <p class="tw-text-xs tw-text-gray-500 tw-mt-2">
+                订阅报警后，设备会自动推送报警信息到平台
+              </p>
+            </div>
+          </el-col>
+        </el-row>
+      </div>
+
       <!-- 操作按钮 -->
       <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-6">
         <h3 class="tw-text-lg tw-font-bold tw-mb-4 tw-border-b tw-pb-2">操作</h3>
@@ -326,6 +448,7 @@ import { useDeviceStore, useChannelStore } from '@/stores/device'
 import { deviceExtendApi, type DevicePosition, type DeviceStatusInfo, type DeviceInfoDetail } from '@/api/device-extend'
 import { wsService } from '@/api/websocket'
 import { ptzApi } from '@/api/ptz'
+import { subscriptionApi, type CatalogSubscription, type AlarmSubscription } from '@/api/subscription'
 import PTZControl from '@/components/PTZControl.vue'
 
 const route = useRoute()
@@ -359,6 +482,20 @@ const syncing = ref(false)
 
 /** 测试云台状态 */
 const testingPTZ = ref(false)
+
+/** 目录订阅列表 */
+const catalogSubscriptions = ref<CatalogSubscription[]>([])
+const loadingCatalogSubscriptions = ref(false)
+
+/** 报警订阅列表 */
+const alarmSubscriptions = ref<AlarmSubscription[]>([])
+const loadingAlarmSubscriptions = ref(false)
+
+/** 订阅操作状态 */
+const subscribingCatalog = ref(false)
+const unsubscribingCatalog = ref(false)
+const subscribingAlarm = ref(false)
+const unsubscribingAlarm = ref(false)
 
 /** 格式化时间 */
 function formatTime(time: string | undefined) {
@@ -534,6 +671,112 @@ async function testPTZ() {
   }
 }
 
+/** 获取当前设备的目录订阅状态 */
+async function fetchCatalogSubscriptions() {
+  loadingCatalogSubscriptions.value = true
+  try {
+    const res = await subscriptionApi.catalog.getList()
+    if (res.data?.list) {
+      // 筛选当前设备的订阅
+      catalogSubscriptions.value = res.data.list.filter(
+        (sub) => sub.device_id === deviceId.value
+      )
+    }
+  } catch {
+    // 静默处理
+  } finally {
+    loadingCatalogSubscriptions.value = false
+  }
+}
+
+/** 获取当前设备的报警订阅状态 */
+async function fetchAlarmSubscriptions() {
+  loadingAlarmSubscriptions.value = true
+  try {
+    const res = await subscriptionApi.alarm.getList()
+    if (res.data?.subscriptions) {
+      // 筛选当前设备的订阅
+      alarmSubscriptions.value = res.data.subscriptions.filter(
+        (sub) => sub.device_id === deviceId.value
+      )
+    }
+  } catch {
+    // 静默处理
+  } finally {
+    loadingAlarmSubscriptions.value = false
+  }
+}
+
+/** 订阅目录 */
+async function subscribeCatalog() {
+  if (!deviceId.value) return
+  subscribingCatalog.value = true
+  try {
+    await subscriptionApi.catalog.subscribe(deviceId.value)
+    ElMessage.success('目录订阅成功')
+    // 刷新订阅状态
+    await fetchCatalogSubscriptions()
+  } catch {
+    ElMessage.error('目录订阅失败')
+  } finally {
+    subscribingCatalog.value = false
+  }
+}
+
+/** 取消目录订阅 */
+async function unsubscribeCatalog(sn?: string) {
+  if (!deviceId.value) return
+  unsubscribingCatalog.value = true
+  try {
+    await subscriptionApi.catalog.unsubscribe(deviceId.value, sn)
+    ElMessage.success('取消目录订阅成功')
+    // 刷新订阅状态
+    await fetchCatalogSubscriptions()
+  } catch {
+    ElMessage.error('取消目录订阅失败')
+  } finally {
+    unsubscribingCatalog.value = false
+  }
+}
+
+/** 订阅报警 */
+async function subscribeAlarm() {
+  if (!deviceId.value) return
+  subscribingAlarm.value = true
+  try {
+    await subscriptionApi.alarm.subscribe(deviceId.value)
+    ElMessage.success('报警订阅成功')
+    // 刷新订阅状态
+    await fetchAlarmSubscriptions()
+  } catch {
+    ElMessage.error('报警订阅失败')
+  } finally {
+    subscribingAlarm.value = false
+  }
+}
+
+/** 取消报警订阅 */
+async function unsubscribeAlarm(sn: string) {
+  if (!deviceId.value) return
+  unsubscribingAlarm.value = true
+  try {
+    await subscriptionApi.alarm.unsubscribe(deviceId.value, sn)
+    ElMessage.success('取消报警订阅成功')
+    // 刷新订阅状态
+    await fetchAlarmSubscriptions()
+  } catch {
+    ElMessage.error('取消报警订阅失败')
+  } finally {
+    unsubscribingAlarm.value = false
+  }
+}
+
+/** 计算属性：是否有目录订阅 */
+const hasCatalogSubscription = computed(() => catalogSubscriptions.value.length > 0)
+
+/** 计算属性：是否有报警订阅 */
+const hasAlarmSubscription = computed(() => alarmSubscriptions.value.length > 0)
+
 /** 监听通道列表变化，自动选择第一个通道 */
 watch(channels, (newChannels) => {
   // 如果只有一个通道且未选择，自动选择
@@ -549,6 +792,9 @@ onMounted(() => {
     channelStore.fetchChannels()
     // 初始化数据
     refreshPosition()
+    // 加载订阅状态
+    fetchCatalogSubscriptions()
+    fetchAlarmSubscriptions()
     // 连接 WebSocket
     wsService.connect()
     setupWebSocket()

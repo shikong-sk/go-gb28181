@@ -42,6 +42,23 @@ export const playApi = {
   queryRecords: (params: RecordQueryParams) => {
     return get<RecordListResponse>(`${RECORD_BASE_URL}/list`, params as unknown as Record<string, unknown>)
   },
+
+  /** 触发录像拉取（强制刷新缓存） */
+  fetchRecords: (params: FetchRecordsParams) => {
+    return post<FetchRecordsResponse>(`${RECORD_BASE_URL}/fetch`, params)
+  },
+
+  /** 获取录像拉取状态 */
+  getFetchStatus: (deviceId: string, channelId: string, date?: string) => {
+    const params: Record<string, unknown> = {
+      device_id: deviceId,
+      channel_id: channelId,
+    }
+    if (date) {
+      params.date = date
+    }
+    return get<FetchRecordsResponse>(`${RECORD_BASE_URL}/fetch/status`, params)
+  },
 }
 
 /** 回放请求参数 */
@@ -89,6 +106,7 @@ export interface RecordQueryParams {
   channel_id: string
   date?: string
   timeout?: number
+  force?: boolean  // 强制刷新缓存
 }
 
 /** 录像记录项 */
@@ -109,4 +127,27 @@ export interface RecordListResponse {
   channel_id: string
   total: number
   items: RecordItem[]
+  source: string      // 数据来源: cache, db, device
+  cached_at: string   // 缓存时间（仅缓存数据有）
+  expires_at: string  // 过期时间（仅缓存数据有）
+  expires_in: number  // 距离过期剩余秒数（仅缓存数据有）
+  item_count: number  // 录像项数量
+}
+
+/** 录像拉取请求 */
+export interface FetchRecordsParams {
+  device_id: string
+  channel_id: string
+  date?: string
+  timeout?: number
+}
+
+/** 录像拉取响应 */
+export interface FetchRecordsResponse {
+  device_id: string
+  channel_id: string
+  date: string
+  status: string     // 拉取状态: pending, fetching, completed, failed, expired
+  message: string    // 状态消息
+  item_count: number // 已拉取的录像数量
 }

@@ -1,3 +1,5 @@
+// 必须在顶部导入reflect-metadata，用于装饰器支持
+import 'reflect-metadata'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
@@ -7,11 +9,6 @@ import './assets/styles/tailwind.css'
 import './assets/styles/index.css'
 import App from './App.vue'
 import router from './router'
-
-// 导入 flv.js 用于视频播放
-import flvjs from 'flv.js'
-// @ts-expect-error flv.js 挂载到 window
-window.flvjs = flvjs
 
 const app = createApp(App)
 

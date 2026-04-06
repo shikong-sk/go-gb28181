@@ -129,6 +129,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Channel{},
 		&model.Alarm{},
 		&model.DevicePosition{}, // 新增
+		&model.RecordCache{},    // 录像缓存
 	)
 }
 

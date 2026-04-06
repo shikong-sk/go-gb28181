@@ -18,9 +18,35 @@ export default defineConfig({
       dts: 'src/types/components.d.ts',
     }),
   ],
+    // 配置esbuild支持装饰器
+  esbuild: {
+    tsconfigRaw: {
+      compilerOptions: {
+        experimentalDecorators: true,
+        useDefineForClassFields: false,
+      },
+    },
+  },
+  // 优化jessibuca相关包的依赖
+  optimizeDeps: {
+    include: [
+      'reflect-metadata',
+      'afsm',
+      'eventemitter3',
+      'oput',
+      'jv4-connection',
+      'jv4-demuxer',
+      'jv4-decoder',
+    ],
+    // 强制预构建这些包
+    force: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      // 使用预编译版本
+      'jv4-connection': path.resolve(__dirname, 'node_modules/jv4-connection/dist/index.js'),
+      'jv4-decoder': path.resolve(__dirname, 'node_modules/jv4-decoder/dist/index.js'),
     },
   },
   server: {

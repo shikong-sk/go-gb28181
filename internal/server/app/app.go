@@ -41,8 +41,9 @@ type App struct {
 	positionService            *service.PositionService
 	statusService              *service.DeviceStatusService
 	infoService                *service.DeviceInfoService
-	eventService               *service.EventService // 事件发布服务
-	ssrcService                *service.SsrcService  // SSRC 管理服务
+	eventService               *service.EventService       // 事件发布服务
+	ssrcService                *service.SsrcService        // SSRC 管理服务
+	recordFetchService         *service.RecordFetchService // 录像缓存拉取服务
 
 	// 服务器
 	sipServer   *sip.SIPServer
@@ -52,9 +53,10 @@ type App struct {
 	redisClient *redis.Client               // Redis 客户端
 
 	// 仓库（用于 Start 中初始化服务）
-	deviceRepo   *repository.DeviceRepository
-	channelRepo  *repository.ChannelRepository
-	positionRepo repository.PositionRepository
+	deviceRepo      *repository.DeviceRepository
+	channelRepo     *repository.ChannelRepository
+	positionRepo    repository.PositionRepository
+	recordCacheRepo *repository.RecordCacheRepository
 
 	// 状态
 	running bool
@@ -87,6 +89,7 @@ func (a *App) Init() error {
 	a.deviceRepo = repository.NewDeviceRepository(db)
 	a.channelRepo = repository.NewChannelRepository(db)
 	a.positionRepo = repository.NewPositionRepository(db)
+	a.recordCacheRepo = repository.NewRecordCacheRepository(db)
 
 	// 3. 初始化事件服务（WebSocketManager 暂未初始化，事件仅记录日志）
 	a.eventService = service.NewEventService()
@@ -183,7 +186,7 @@ func (a *App) Start() error {
 		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort, a.config.ZLMediaKit.RtpPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
 		a.downloadService = service.NewDownloadService(a.playService)
 		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
-		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
+		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.recordCacheRepo, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
 		a.statusService = service.NewDeviceStatusService(sipClient, a.deviceService, a.subscriptionService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
 		a.infoService = service.NewDeviceInfoService(sipClient, a.deviceService, a.subscriptionService, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
 
@@ -207,6 +210,15 @@ func (a *App) Start() error {
 		a.sipServer.SetPositionService(a.positionService)
 		a.sipServer.SetPlayService(a.playService)
 		a.sipServer.SetAlarmSubscriptionService(a.alarmSubscriptionService)
+
+		// 初始化录像缓存拉取服务
+		a.recordFetchService = service.NewRecordFetchService(
+			a.recordService,
+			a.deviceService,
+			a.recordCacheRepo,
+			a.channelRepo,
+			24, // 默认缓存 24 小时
+		)
 	}
 
 	// 3. 启动 HTTP 服务
@@ -251,6 +263,7 @@ func (a *App) Start() error {
 	go a.startSubscriptionCleanup()
 	go a.startDownloadCleanup()
 	go a.startPlaySessionCleanup()
+	go a.startRecordFetch()
 
 	return nil
 }
@@ -308,6 +321,10 @@ func (a *App) Stop() {
 
 	if a.wsManager != nil {
 		a.wsManager.Stop()
+	}
+
+	if a.recordFetchService != nil {
+		a.recordFetchService.StopBackgroundFetcher()
 	}
 
 	if a.redisClient != nil {
@@ -431,6 +448,15 @@ func (a *App) startPlaySessionCleanup() {
 	}
 }
 
+// startRecordFetch 启动录像缓存后台拉取 (每小时执行)
+func (a *App) startRecordFetch() {
+	if a.recordFetchService == nil {
+		return
+	}
+	// 默认每小时拉取一次录像缓存
+	a.recordFetchService.StartBackgroundFetcher(1 * time.Hour)
+}
+
 // GetDeviceService 获取设备服务
 func (a *App) GetDeviceService() *service.DeviceService {
 	return a.deviceService
@@ -469,6 +495,11 @@ func (a *App) GetSIPServer() *sip.SIPServer {
 // GetSsrcService 获取 SSRC 管理服务
 func (a *App) GetSsrcService() *service.SsrcService {
 	return a.ssrcService
+}
+
+// GetRecordFetchService 获取录像缓存拉取服务
+func (a *App) GetRecordFetchService() *service.RecordFetchService {
+	return a.recordFetchService
 }
 
 // IsRunning 检查是否运行中

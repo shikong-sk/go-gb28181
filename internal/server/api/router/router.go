@@ -124,6 +124,8 @@ func SetupRouterWithServices(catalogService *service.CatalogService, catalogSubs
 		record := api.Group("/record")
 		{
 			record.GET("/list", recordHandler.List)
+			record.POST("/fetch", recordHandler.Fetch)
+			record.GET("/fetch/status", recordHandler.FetchStatus)
 		}
 
 		// 录像下载
