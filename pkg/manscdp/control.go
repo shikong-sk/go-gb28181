@@ -28,11 +28,18 @@ const (
 
 // DeviceControlReq 设备控制请求 (云台控制)
 type DeviceControlReq struct {
-	XMLName  xml.Name `xml:"Control"`
-	CmdType  string   `xml:"CmdType"`
-	SN       string   `xml:"SN"`
-	DeviceID string   `xml:"DeviceID"`
-	PTZCmd   *PTZCmd  `xml:"PTZCmd,omitempty"`
+	XMLName  xml.Name     `xml:"Control"`
+	CmdType  string       `xml:"CmdType"`
+	SN       string       `xml:"SN"`
+	DeviceID string       `xml:"DeviceID"`
+	PTZCmd   *PTZCmd      `xml:"PTZCmd,omitempty"`
+	Info     *ControlInfo `xml:"Info,omitempty"`
+}
+
+// ControlInfo 控制信息
+type ControlInfo struct {
+	XMLName         xml.Name `xml:"Info"`
+	ControlPriority int      `xml:"ControlPriority"` // 控制优先级，范围 0-10，默认 5
 }
 
 // PTZCmd 云台控制命令
@@ -49,54 +56,71 @@ func NewPTZControlReq(sn, deviceID string, ptzCmd string) *DeviceControlReq {
 		SN:       sn,
 		DeviceID: deviceID,
 		PTZCmd:   &PTZCmd{Value: ptzCmd},
+		Info:     &ControlInfo{ControlPriority: 5},
 	}
 }
 
 // BuildPTZCmd 构建云台控制命令字符串
-// GB28181 云台控制命令格式: AABBCDDD
-// AA: 方向 (00=停止, 01=上, 02=下, 04=左, 08=右, 组合方向为方向值相加)
-// BB: 预置点编号 (00-FF)
-// C: 水平速度 (0-F)
-// DDD: 垂直速度 (000-255)
+// GB28181 Pelco-D 扩展格式 (8字节):
+// 字节0-1: 同步头 (A5 0F 固定)
+// 字节2: 组合码 (云台控制固定 01)
+// 字节3: 命令码 (方向控制位)
+// 字节4: 水平速度 (0-255)
+// 字节5: 垂直速度 (0-255)
+// 字节6: Zoom速度/预留
+// 字节7: 校验和 (字节1-6按位异或，不含A5)
+//
+// 命令码位定义 (根据WVP成功日志验证):
+// Bit0 (0x01): 右转/电机2正转
+// Bit1 (0x02): 左转/电机2反转
+// Bit2 (0x04): 下转/电机1反转
+// Bit3 (0x08): 上转/电机1正转
+// Bit4 (0x10): 放大
+// Bit5 (0x20): 缩小
+//
+// 示例 (WVP成功日志):
+// - 向左: A50F01021E1E1003 (命令码02=左, 水平速度1E=30, 垂直速度1E=30)
+// - 停止: A50F0100000000B5 (命令码00=停止, 校验和0F^01=0xB5)
 func BuildPTZCmd(direction PTZDirection, horizontalSpeed, verticalSpeed int) string {
-	var directionCode int
+	// 命令码映射 (根据WVP日志验证的格式)
+	var cmdCode byte
 	switch direction {
 	case PTZStop:
-		directionCode = 0
+		cmdCode = 0x00
 	case PTZUp:
-		directionCode = 1
+		cmdCode = 0x08 // Bit3: 上转
 	case PTZDown:
-		directionCode = 2
+		cmdCode = 0x04 // Bit2: 下转
 	case PTZLeft:
-		directionCode = 4
+		cmdCode = 0x02 // Bit1: 左转 (WVP验证)
 	case PTZRight:
-		directionCode = 8
+		cmdCode = 0x01 // Bit0: 右转
 	case PTZUpLeft:
-		directionCode = 5 // 1 + 4
+		cmdCode = 0x0A // 上(08) + 左(02) = 0A
 	case PTZUpRight:
-		directionCode = 9 // 1 + 8
+		cmdCode = 0x09 // 上(08) + 右(01) = 09
 	case PTZDownLeft:
-		directionCode = 6 // 2 + 4
+		cmdCode = 0x06 // 下(04) + 左(02) = 06
 	case PTZDownRight:
-		directionCode = 10 // 2 + 8
+		cmdCode = 0x05 // 下(04) + 右(01) = 05
 	case PTZZoomIn:
-		directionCode = 16
+		cmdCode = 0x10 // Bit4: 放大
 	case PTZZoomOut:
-		directionCode = 32
+		cmdCode = 0x20 // Bit5: 缩小
 	case PTZFocusNear:
-		directionCode = 64
+		cmdCode = 0x40 // Bit6: 近焦
 	case PTZFocusFar:
-		directionCode = 128
+		cmdCode = 0x80 // Bit7: 远焦
 	default:
-		directionCode = 0
+		cmdCode = 0x00
 	}
 
-	// 限制速度范围
+	// 限制速度范围 (0-255)
 	if horizontalSpeed < 0 {
 		horizontalSpeed = 0
 	}
-	if horizontalSpeed > 15 {
-		horizontalSpeed = 15
+	if horizontalSpeed > 255 {
+		horizontalSpeed = 255
 	}
 	if verticalSpeed < 0 {
 		verticalSpeed = 0
@@ -105,10 +129,34 @@ func BuildPTZCmd(direction PTZDirection, horizontalSpeed, verticalSpeed int) str
 		verticalSpeed = 255
 	}
 
-	// 构建命令字符串: AABBCDDD
-	// AA: 方向 (2位十六进制)
-	// BB: 预置点 (固定00)
-	// C: 水平速度 (1位十六进制)
-	// DDD: 垂直速度 (3位十进制)
-	return fmt.Sprintf("%02X00%1X%03d", directionCode, horizontalSpeed, verticalSpeed)
+	// Zoom 速度：根据方向设置
+	zoomSpeed := byte(0x10) // 默认值
+	if direction == PTZStop {
+		zoomSpeed = 0x00
+	} else if direction == PTZZoomIn || direction == PTZZoomOut {
+		zoomSpeed = byte(horizontalSpeed) // Zoom操作使用水平速度
+	}
+
+	// 构建 8 字节命令
+	cmd := []byte{
+		0xA5,                  // 同步头1
+		0x0F,                  // 同步头2
+		0x01,                  // 组合码 (云台控制)
+		cmdCode,               // 命令码
+		byte(horizontalSpeed), // 水平速度
+		byte(verticalSpeed),   // 垂直速度
+		zoomSpeed,             // Zoom/预留
+		0x00,                  // 校验和 (待计算)
+	}
+
+	// 计算校验和: 前7字节累加后 mod 256 (根据WVP日志验证)
+	var checksum int
+	for i := 0; i < 7; i++ {
+		checksum += int(cmd[i])
+	}
+	cmd[7] = byte(checksum % 256)
+
+	// 返回 16 字符的十六进制字符串
+	return fmt.Sprintf("%02X%02X%02X%02X%02X%02X%02X%02X",
+		cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7])
 }

@@ -62,9 +62,10 @@ func (s *PTZService) PTZControl(deviceId, channelId string, direction manscdp.PT
 		return fmt.Errorf("序列化云台控制请求失败: %w", err)
 	}
 
-	// 构建目标 URI - 使用通道 ID
+	// 构建目标 URI - 使用设备 ID（不是通道 ID）
+	// SIP MESSAGE 应发送给设备，XML body 中的 DeviceID 才是通道 ID
 	target := sip.Uri{
-		User: channelId,
+		User: deviceId,
 		Host: deviceIP,
 		Port: devicePort,
 	}
