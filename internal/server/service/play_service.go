@@ -82,6 +82,7 @@ type PlaySession struct {
 	ViewerCount  int  // 实际观看者计数（Play 调用次数）
 	PendingClose bool // 是否处于延迟关闭等待中（观看者为0时等待60秒）
 
+	LastLogTime      time.Time // 上次打印活跃日志的时间
 	streamRegistered chan bool // 流注册通知 channel（内部使用）
 }
 
@@ -428,22 +429,10 @@ func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
 		time.Sleep(60 * time.Second)
 
 		s.mu.Lock()
-
-		// 再次检查会话状态
+		// 检查会话是否存在
 		session, exists := s.sessions[streamId]
 		if !exists {
 			s.mu.Unlock()
-			return
-		}
-
-		// 如果期间有新的观看者，取消断流
-		if session.ViewerCount > 0 {
-			session.PendingClose = false
-			s.mu.Unlock()
-			log.Info().
-				Str("stream_id", streamId).
-				Int("viewer_count", session.ViewerCount).
-				Msg("延迟关闭期间有新观看者，取消断流")
 			return
 		}
 
@@ -453,9 +442,11 @@ func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
 			return
 		}
 
+		// 记录服务端计数的观看人数（仅用于日志）
+		viewerCount := session.ViewerCount
 		s.mu.Unlock()
 
-		// 查询 ZLM 获取实际观看人数
+		// 查询 ZLM 获取实际观看人数（以 ZLM 为准）
 		zlmReaderCount := s.getZlmReaderCount(streamId)
 
 		if zlmReaderCount > 0 {
@@ -463,6 +454,7 @@ func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
 			log.Info().
 				Str("stream_id", streamId).
 				Int64("zlm_reader_count", zlmReaderCount).
+				Int("server_viewer_count", viewerCount).
 				Msg("ZLM 报告仍有观看者，继续推迟60秒再检测")
 			continue // 继续循环，再次等待60秒
 		}
@@ -475,8 +467,8 @@ func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
 			return
 		}
 
-		// 再次检查状态（可能在查询 ZLM 期间发生变化）
-		if session.ViewerCount > 0 || !session.PendingClose {
+		// 再次检查是否还在延迟关闭状态
+		if !session.PendingClose {
 			s.mu.Unlock()
 			return
 		}
@@ -621,8 +613,23 @@ func (s *PlayService) UpdateStreamActiveTime(streamId string) {
 
 	session, exists := s.sessions[streamId]
 	if exists {
-		session.LastActiveTime = time.Now()
-		log.Debug().Str("stream_id", streamId).Msg("更新流活跃时间")
+		now := time.Now()
+		session.LastActiveTime = now
+
+		// 降低日志频率：每30秒打印一次
+		if session.LastLogTime.IsZero() || now.Sub(session.LastLogTime) >= 30*time.Second {
+			session.LastLogTime = now
+			aliveSeconds := int(now.Sub(session.StartTime).Seconds())
+			log.Info().
+				Str("stream_id", streamId).
+				Str("device_id", session.DeviceId).
+				Str("channel_id", session.ChannelId).
+				Str("mode", string(session.Mode)).
+				Int("alive_seconds", aliveSeconds).
+				Int("viewer_count", session.ViewerCount).
+				Int("reader_count", session.ReaderCount).
+				Msg("流活跃中")
+		}
 	}
 }
 
@@ -868,6 +875,46 @@ func (s *PlayService) CheckStreamHealth(timeout time.Duration) {
 			// 触发断流检测流程（webhook 可能没有触发，这里作为兜底）
 			go s.OnStreamDisconnected(item.streamId)
 		}
+	}
+}
+
+// CheckViewerCount 检查所有流的观看人数
+// 每3分钟调用一次，如果 ZLM 报告无人观看且会话未在延迟关闭状态，触发延迟关闭流程
+func (s *PlayService) CheckViewerCount() {
+	s.mu.RLock()
+	// 复制会话列表
+	streamIds := make([]string, 0, len(s.sessions))
+	for streamId := range s.sessions {
+		streamIds = append(streamIds, streamId)
+	}
+	s.mu.RUnlock()
+
+	for _, streamId := range streamIds {
+		// 查询 ZLM 获取实际观看人数
+		zlmReaderCount := s.getZlmReaderCount(streamId)
+
+		s.mu.Lock()
+		session, exists := s.sessions[streamId]
+		if !exists {
+			s.mu.Unlock()
+			continue
+		}
+
+		// 如果 ZLM 报告无人观看且不在延迟关闭状态，触发延迟关闭
+		if zlmReaderCount == 0 && !session.PendingClose && !session.UserStopped {
+			session.PendingClose = true
+			log.Info().
+				Str("stream_id", streamId).
+				Msg("定时检查发现无人观看，进入60秒延迟关闭等待")
+			go s.delayedCloseWithZlmVerify(streamId)
+		} else {
+			log.Debug().
+				Str("stream_id", streamId).
+				Int64("zlm_reader_count", zlmReaderCount).
+				Bool("pending_close", session.PendingClose).
+				Msg("定时检查观看人数")
+		}
+		s.mu.Unlock()
 	}
 }
 

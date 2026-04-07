@@ -265,6 +265,7 @@ func (a *App) Start() error {
 	go a.startPlaySessionCleanup()
 	go a.startRecordFetch()
 	go a.startStreamHealthCheck() // 流断开超时检测
+	go a.startViewerCountCheck()  // 观看人数检查（每3分钟）
 
 	return nil
 }
@@ -496,6 +497,30 @@ func (a *App) startStreamHealthCheck() {
 			if a.playService != nil {
 				// 流断开超过3秒触发重连（重连逻辑：BYE->2秒等待->INVITE->10秒等待->最多3次）
 				a.playService.CheckStreamHealth(3 * time.Second)
+			}
+		}
+	}
+}
+
+// startViewerCountCheck 启动观看人数检查定时任务 (每3分钟执行)
+// 检查所有流的观看人数，如果无人观看则触发延迟关闭流程
+func (a *App) startViewerCountCheck() {
+	ticker := time.NewTicker(3 * time.Minute)
+	defer ticker.Stop()
+
+	// 启动后立即执行一次检查
+	if a.playService != nil {
+		a.playService.CheckViewerCount()
+	}
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			log.Info().Msg("观看人数检查任务停止")
+			return
+		case <-ticker.C:
+			if a.playService != nil {
+				a.playService.CheckViewerCount()
 			}
 		}
 	}
