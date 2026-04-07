@@ -189,6 +189,7 @@ func (s *AlarmSubscriptionService) Unsubscribe(deviceID, sn string) error {
 
 // HandleAlarmNotify 处理报警通知
 // COMPAT_JAVA: 报警去重窗口 5 分钟
+// 注意：设备可以主动推送报警，不依赖于订阅
 func (s *AlarmSubscriptionService) HandleAlarmNotify(notify *manscdp.AlarmNotify) error {
 	deviceID := notify.DeviceID
 	sn := notify.SN
@@ -199,19 +200,19 @@ func (s *AlarmSubscriptionService) HandleAlarmNotify(notify *manscdp.AlarmNotify
 		Str("alarm_priority", notify.AlarmPriority).
 		Str("alarm_method", notify.AlarmMethod).
 		Str("alarm_time", notify.AlarmTime).
-		Msg("收到报警订阅通知")
+		Msg("收到报警通知")
 
-	// 检查订阅是否存在
+	// 检查是否为订阅报警（用于日志记录）
 	key := s.buildKey(deviceID, sn)
-	if _, ok := s.subscriptions.Load(key); !ok {
-		log.Warn().
-			Str("device_id", deviceID).
-			Str("sn", sn).
-			Msg("收到未知订阅的报警通知")
-		return nil
+	isSubscribed := false
+	if _, ok := s.subscriptions.Load(key); ok {
+		isSubscribed = true
+		log.Debug().Str("device_id", deviceID).Str("sn", sn).Msg("订阅报警通知")
+	} else {
+		log.Debug().Str("device_id", deviceID).Str("sn", sn).Msg("设备主动推送报警")
 	}
 
-	// 报警去重检查 (5分钟窗口)
+	// 报警去重检查 (5分钟窗口) - 无论是否订阅都要去重
 	if s.isDuplicateAlarm(notify) {
 		log.Debug().
 			Str("device_id", deviceID).
@@ -221,7 +222,7 @@ func (s *AlarmSubscriptionService) HandleAlarmNotify(notify *manscdp.AlarmNotify
 		return nil
 	}
 
-	// 保存报警信息到数据库
+	// 保存报警信息到数据库 - 无论是否订阅都要保存
 	alarmRecord := &model.Alarm{
 		DeviceID:         notify.DeviceID,
 		AlarmPriority:    notify.AlarmPriority,
@@ -236,7 +237,7 @@ func (s *AlarmSubscriptionService) HandleAlarmNotify(notify *manscdp.AlarmNotify
 			log.Error().Err(err).Str("device_id", deviceID).Msg("保存报警失败")
 			return err
 		}
-	} else {
+	} else if s.alarmRepo != nil {
 		// 如果没有 alarmService，直接保存
 		if err := s.alarmRepo.Create(alarmRecord); err != nil {
 			log.Error().Err(err).Str("device_id", deviceID).Msg("保存报警失败")
@@ -258,7 +259,8 @@ func (s *AlarmSubscriptionService) HandleAlarmNotify(notify *manscdp.AlarmNotify
 	log.Info().
 		Str("device_id", deviceID).
 		Str("alarm_priority", notify.AlarmPriority).
-		Msg("报警已处理并推送")
+		Bool("subscribed", isSubscribed).
+		Msg("报警已保存并推送")
 
 	return nil
 }

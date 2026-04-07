@@ -185,7 +185,7 @@ export const useDeviceStore = defineStore('device', () => {
     ElNotification({
       title: '报警通知',
       message: `设备 ${event.data.device_id} ${priorityText}优先级报警: ${event.data.alarm_description}`,
-      type: 'error',
+      type: 'warning',
       duration: 5000,
     })
   }
