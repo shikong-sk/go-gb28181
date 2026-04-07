@@ -146,11 +146,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Monitor, CircleCheck, CircleClose, Refresh } from '@element-plus/icons-vue'
 import { useDeviceStore } from '@/stores/device'
+import { wsService } from '@/api/websocket'
 import type { Device } from '@/types/device'
 
 const router = useRouter()
@@ -159,6 +160,9 @@ const deviceStore = useDeviceStore()
 const statusFilter = ref<string>('')
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// WebSocket 订阅取消函数
+let unsubscribeWs: (() => void) | null = null
 
 /** 格式化时间 */
 function formatTime(time: string) {
@@ -224,5 +228,25 @@ async function handleSyncCatalog(device: Device) {
 onMounted(() => {
   deviceStore.fetchDevices()
   deviceStore.fetchStats()
+
+  // 连接 WebSocket 并订阅设备状态变更事件
+  deviceStore.connectWebSocket()
+
+  // 订阅设备上线/离线事件，自动刷新列表
+  unsubscribeWs = wsService.subscribeAll((event) => {
+    if (event.type === 'device_online' || event.type === 'device_offline') {
+      // 收到设备状态变更事件时刷新列表和统计
+      deviceStore.fetchDevices()
+      deviceStore.fetchStats()
+    }
+  })
+})
+
+onUnmounted(() => {
+  // 取消 WebSocket 订阅
+  if (unsubscribeWs) {
+    unsubscribeWs()
+    unsubscribeWs = null
+  }
 })
 </script>

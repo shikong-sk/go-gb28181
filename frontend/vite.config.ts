@@ -56,6 +56,11 @@ export default defineConfig({
         target: 'http://10.10.10.30:8080',
         changeOrigin: true,
       },
+      '/ws': {
+        target: 'ws://10.10.10.30:8080',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 })

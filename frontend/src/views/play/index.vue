@@ -297,6 +297,7 @@ import {
   type DownloadSessionResponse,
   type ProgressResponse,
 } from '@/api/download'
+import { wsService } from '@/api/websocket'
 import PTZControl from '@/components/PTZControl.vue'
 import JessibucaPlayer, { type VideoDecoderType } from '@/components/JessibucaPlayer.vue'
 
@@ -329,6 +330,9 @@ const currentDownload = ref<DownloadSessionResponse | null>(null)
 const downloadProgress = ref<ProgressResponse | null>(null)
 const downloadSessions = ref<DownloadSessionResponse[]>([])
 let downloadProgressTimer: ReturnType<typeof setInterval> | null = null
+
+// WebSocket 订阅取消函数
+let unsubscribeWs: (() => void) | null = null
 
 function formatDateTime(date: Date): string {
   const pad = (n: number) => n.toString().padStart(2, '0')
@@ -714,10 +718,34 @@ onMounted(() => {
   }
 
   refreshSessions()
+
+  // 订阅播放会话事件，收到事件时刷新会话列表
+  unsubscribeWs = wsService.subscribe('play_session_start', () => {
+    refreshSessions()
+  })
+  wsService.subscribe('play_session_stop', () => {
+    refreshSessions()
+    // 如果当前播放的会话被停止，清理播放状态
+    if (currentStream.value) {
+      const stoppedStreamId = currentStream.value.stream_id
+      // 检查是否是当前播放的会话
+      sessions.value = sessions.value.filter(s => s.stream_id !== stoppedStreamId)
+      if (currentStream.value.stream_id === stoppedStreamId) {
+        playing.value = false
+        currentStream.value = null
+        currentSession.value = null
+      }
+    }
+  })
 })
 
 onUnmounted(() => {
   // 清理下载进度定时器
   stopDownloadProgressPolling()
+  // 取消 WebSocket 订阅
+  if (unsubscribeWs) {
+    unsubscribeWs()
+    unsubscribeWs = null
+  }
 })
 </script>

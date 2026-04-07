@@ -255,12 +255,10 @@ onMounted(() => {
   deviceStore.fetchDevices()
   deviceStore.fetchStats()
   channelStore.fetchStats()
-  // 自动连接 WebSocket
-  deviceStore.connectWebSocket()
+  // WebSocket 连接已移至 App.vue 全局管理
 })
 
 onUnmounted(() => {
-  // 页面卸载时断开 WebSocket
-  deviceStore.disconnectWebSocket()
+  // WebSocket 断开已移至 App.vue 全局管理
 })
 </script>

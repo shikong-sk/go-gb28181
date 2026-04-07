@@ -41,18 +41,17 @@ type SIPConfig struct {
 
 	// 本地配置
 	DeviceID   string `mapstructure:"device_id"`   // 设备 ID (20位国标编码)
-	ListenIP   string `mapstructure:"listen_ip"`   // 监听 IP (0.0.0.0 监听所有)
+	ListenIP   string `mapstructure:"listen_ip"`   // 监听 IP (设备访问的网卡IP，多网卡时需指定具体IP)
 	ListenPort int    `mapstructure:"listen_port"` // 监听端口
 	ExternalIP string `mapstructure:"external_ip"` // 对外 IP (SIP 消息中的 IP)
 
 	// 认证配置
 	Password string `mapstructure:"password"` // 密码
 
-	// 功能开关
-	Enabled       bool `mapstructure:"enabled"`        // 是否启用 SIP 服务
-	RegisterCycle int  `mapstructure:"register_cycle"` // 注册周期(秒)
-	KeepaliveInt  int  `mapstructure:"keepalive_int"`  // 心跳间隔(秒)
-	InviteTimeout int  `mapstructure:"invite_timeout"` // INVITE 超时(秒)
+	// 功能配置
+	RegisterCycle int `mapstructure:"register_cycle"` // 注册周期(秒)
+	KeepaliveInt  int `mapstructure:"keepalive_int"`  // 心跳间隔(秒)
+	InviteTimeout int `mapstructure:"invite_timeout"` // INVITE 超时(秒)
 }
 
 // HTTPConfig HTTP API 配置
@@ -105,7 +104,6 @@ func DefaultConfig() *Config {
 			ListenPort:    5099,
 			ExternalIP:    "", // 空则自动检测本机 IP
 			Password:      "12345678",
-			Enabled:       true,
 			RegisterCycle: 3600,
 			KeepaliveInt:  30,
 			InviteTimeout: 15,
@@ -193,7 +191,6 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("sip.listen_ip", c.SIP.ListenIP)
 	v.SetDefault("sip.listen_port", c.SIP.ListenPort)
 	v.SetDefault("sip.password", c.SIP.Password)
-	v.SetDefault("sip.enabled", c.SIP.Enabled)
 	v.SetDefault("sip.register_cycle", c.SIP.RegisterCycle)
 	v.SetDefault("sip.keepalive_int", c.SIP.KeepaliveInt)
 	v.SetDefault("sip.invite_timeout", c.SIP.InviteTimeout)
@@ -228,6 +225,7 @@ func generateDefaultConfig() error {
 debug = false
 
 [sip]
+# SIP 是核心功能，必须配置
 # SIP 服务器配置
 server_id = "34020000002000000001"   # 服务器 ID (20位国标编码)
 server_ip = "127.0.0.1"               # 服务器 IP
@@ -235,8 +233,15 @@ server_port = 5060                    # 服务器端口
 
 # 本地配置
 device_id = "34020000001320000001"    # 设备 ID (20位国标编码)
-listen_ip = "0.0.0.0"                 # 监听 IP
+# 监听 IP：设备访问的网卡 IP
+# 多网卡主机需指定具体 IP（如内网网卡 IP），让设备能访问到
+# 0.0.0.0 表示监听所有网卡
+listen_ip = "0.0.0.0"
 listen_port = 5099                    # 监听端口
+
+# 对外 IP：SIP 消息中的 IP（设备回连时使用）
+# 为空时自动检测本机 IP，多网卡时建议手动指定
+external_ip = ""
 
 # 认证配置
 password = "12345678"                 # 密码
@@ -248,9 +253,10 @@ register_cycle = 3600
 invite_timeout = 15
 
 [http]
-# HTTP API 配置
-enabled = true                        # 是否启用 HTTP API
-host = "0.0.0.0"                      # 监听地址
+# HTTP API 配置（用户访问）
+# 多网卡主机建议指定用户可访问的网卡 IP
+enabled = true
+host = "0.0.0.0"                      # 监听地址（用户访问的网卡 IP）
 port = 8080                           # 监听端口
 log_file = "logs/server.log"          # 日志文件路径（为空则仅输出到控制台）
 daemonize = false                     # 是否自动切换为后台运行模式

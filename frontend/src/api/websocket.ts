@@ -12,7 +12,11 @@ export type WSEventType =
   | 'device_position'    // 设备位置更新
   | 'alarm'              // 报警通知
   | 'channel_status'     // 通道状态变更
+  | 'channel_update'     // 通道信息更新
   | 'keepalive'          // 心跳更新
+  | 'play_session_start' // 播放会话开始
+  | 'play_session_stop'  // 播放会话停止
+  | 'download_progress'  // 下载进度更新
 
 /** WebSocket 事件数据 */
 export interface WSEvent<T = unknown> {
@@ -57,6 +61,44 @@ export interface AlarmEvent {
   alarm_method: string
   alarm_time: string
   alarm_description: string
+}
+
+/** 通道更新事件数据 */
+export interface ChannelUpdateEvent {
+  device_id: string
+  channel_id: string
+  status?: string
+  name?: string
+}
+
+/** 播放会话开始事件数据 */
+export interface PlaySessionStartEvent {
+  stream_id: string
+  device_id: string
+  channel_id: string
+  mode: 'live' | 'playback'
+  flv_url?: string
+  hls_url?: string
+  rtsp_url?: string
+}
+
+/** 播放会话停止事件数据 */
+export interface PlaySessionStopEvent {
+  stream_id: string
+  device_id: string
+  channel_id: string
+  reason?: string
+}
+
+/** 下载进度事件数据 */
+export interface DownloadProgressEvent {
+  stream_id: string
+  device_id: string
+  channel_id: string
+  progress: number
+  status: 'pending' | 'downloading' | 'completed' | 'failed' | 'cancelled'
+  speed?: number
+  error?: string
 }
 
 /** WebSocket 连接状态 */
@@ -149,6 +191,17 @@ class WebSocketService {
     this.notifyStatusChange()
   }
 
+  /** 重置重连计数（允许重新连接） */
+  resetReconnect(): void {
+    this.reconnectAttempts = 0
+    // 如果当前有连接，先关闭
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
+    }
+    this.status = 'disconnected'
+  }
+
   /** 尝试重连 */
   private tryReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -225,7 +278,8 @@ class WebSocketService {
     const eventTypes: WSEventType[] = [
       'device_online', 'device_offline', 'device_status',
       'device_info', 'device_position', 'alarm',
-      'channel_status', 'keepalive'
+      'channel_status', 'channel_update', 'keepalive',
+      'play_session_start', 'play_session_stop', 'download_progress'
     ]
     eventTypes.forEach((type) => {
       unsubscribes.push(this.subscribe(type, callback))

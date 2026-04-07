@@ -23,6 +23,7 @@ type PlayService struct {
 	config        PlayConfig
 	deviceService *DeviceService // 设备服务，用于获取设备真实 IP
 	ssrcService   *SsrcService   // SSRC 管理服务
+	eventService  *EventService  // 事件发布服务
 	sessions      map[string]*PlaySession
 	mu            sync.RWMutex
 	inviteTimeout int // INVITE 超时时间（秒）
@@ -125,6 +126,11 @@ func NewPlayService(client *sipgo.Client, zlm *zlmediakit.ZLMediaKit, config Pla
 	}
 }
 
+// SetEventService 设置事件发布服务
+func (s *PlayService) SetEventService(eventService *EventService) {
+	s.eventService = eventService
+}
+
 // Play 开始实时播放
 func (s *PlayService) Play(deviceId, channelId string) (*PlayResult, error) {
 	return s.startPlay(deviceId, channelId, PlayModeLive, nil, nil)
@@ -219,7 +225,7 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 
 	// 重要：点播场景必须优先让 ZLM 自动分配 RTP 端口。
 	// 用户已经明确说明：应以 openRtpServer API 返回的端口为准，
-	// 不能把“配置里写了某个固定端口”当成最终收流端口。
+	// 不能把"配置里写了某个固定端口"当成最终收流端口。
 	// 这里显式传 0 给 ZLM，避免固定端口占用、过期端口或多会话冲突导致设备推流失败。
 	rtpPort := 0
 	log.Info().Int("config_rtp_port", s.config.RtpPort).Int("request_rtp_port", rtpPort).Msg("使用自动分配端口调用 OpenRtpServer")
@@ -321,9 +327,15 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 	go s.monitorStreamRegistration(streamId)
 
 	// 统一记录会话已经进入待确认阶段。
-	// 这里不能把“返回播放地址”误判为 RTP 已经成功，
+	// 这里不能把"返回播放地址"误判为 RTP 已经成功，
 	// 真正成功仍以后续的 on_publish / on_stream_changed / getMediaList 为准。
 	session.Status = PlayStatusPlaying
+
+	// 发布播放会话开始事件
+	if s.eventService != nil {
+		s.eventService.PublishPlaySessionStart(streamId, deviceId, channelId, string(mode))
+	}
+
 	log.Info().Str("device_id", deviceId).Str("channel_id", channelId).Str("stream_id", streamId).Str("mode", string(mode)).Msg("开始播放")
 	return s.buildPlayResult(session), nil
 }
@@ -496,6 +508,11 @@ func (s *PlayService) delayedCloseWithZlmVerify(streamId string) {
 
 		session.Status = PlayStatusStopped
 		delete(s.sessions, streamId)
+
+		// 发布播放会话停止事件
+		if s.eventService != nil {
+			s.eventService.PublishPlaySessionStop(streamId, session.DeviceId, session.ChannelId, string(session.Mode), "timeout")
+		}
 
 		s.mu.Unlock()
 
@@ -1075,6 +1092,15 @@ func (s *PlayService) StopWithBye(streamId string) error {
 	session.Status = PlayStatusStopped
 	delete(s.sessions, streamId)
 
+	// 发布播放会话停止事件
+	if s.eventService != nil {
+		reason := "error"
+		if session.UserStopped {
+			reason = "user_stop"
+		}
+		s.eventService.PublishPlaySessionStop(streamId, session.DeviceId, session.ChannelId, string(session.Mode), reason)
+	}
+
 	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Str("ssrc", session.SSRC).Bool("user_stopped", session.UserStopped).Msg("自动断流，已发送 BYE 并清理会话")
 	return nil
 }
@@ -1113,6 +1139,11 @@ func (s *PlayService) ForceStop(streamId string) error {
 
 	session.Status = PlayStatusStopped
 	delete(s.sessions, streamId)
+
+	// 发布播放会话停止事件
+	if s.eventService != nil {
+		s.eventService.PublishPlaySessionStop(streamId, session.DeviceId, session.ChannelId, string(session.Mode), "user_stop")
+	}
 
 	log.Info().Str("stream_id", streamId).Msg("强制停止播放")
 	return nil

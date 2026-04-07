@@ -12,10 +12,14 @@ import (
 type EventType string
 
 const (
-	EventDeviceOnline  EventType = "device_online"
-	EventDeviceOffline EventType = "device_offline"
-	EventAlarm         EventType = "alarm"
-	EventChannelStatus EventType = "channel_status"
+	EventDeviceOnline     EventType = "device_online"
+	EventDeviceOffline    EventType = "device_offline"
+	EventAlarm            EventType = "alarm"
+	EventChannelStatus    EventType = "channel_status"
+	EventPlaySessionStart EventType = "play_session_start"
+	EventPlaySessionStop  EventType = "play_session_stop"
+	EventDownloadProgress EventType = "download_progress"
+	EventChannelUpdate    EventType = "channel_update"
 )
 
 // Event 事件结构
@@ -27,24 +31,60 @@ type Event struct {
 
 // DeviceOnlineEvent 设备上线事件数据
 type DeviceOnlineEvent struct {
-	DeviceID string `json:"deviceId"`
-	IP       string `json:"ip"`
-	Port     int    `json:"port"`
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name,omitempty"`
+	IP         string `json:"ip,omitempty"`
+	Port       int    `json:"port,omitempty"`
 }
 
 // DeviceOfflineEvent 设备离线事件数据
 type DeviceOfflineEvent struct {
-	DeviceID string `json:"deviceId"`
+	DeviceID string `json:"device_id"`
 	Reason   string `json:"reason"` // "timeout" | "unregister"
 }
 
 // AlarmEvent 报警事件数据
 type AlarmEvent struct {
-	DeviceID         string `json:"deviceId"`
-	AlarmPriority    string `json:"alarmPriority"`
-	AlarmMethod      string `json:"alarmMethod"`
-	AlarmTime        string `json:"alarmTime"`
-	AlarmDescription string `json:"alarmDescription"`
+	ID               int    `json:"id,omitempty"`
+	DeviceID         string `json:"device_id"`
+	AlarmPriority    string `json:"alarm_priority"`
+	AlarmMethod      string `json:"alarm_method"`
+	AlarmTime        string `json:"alarm_time"`
+	AlarmDescription string `json:"alarm_description"`
+}
+
+// PlaySessionStartEvent 播放会话开始事件数据
+type PlaySessionStartEvent struct {
+	StreamID  string `json:"stream_id"`
+	DeviceID  string `json:"device_id"`
+	ChannelID string `json:"channel_id"`
+	Mode      string `json:"mode"` // "live" | "playback" | "download"
+}
+
+// PlaySessionStopEvent 播放会话停止事件数据
+type PlaySessionStopEvent struct {
+	StreamID  string `json:"stream_id"`
+	DeviceID  string `json:"device_id"`
+	ChannelID string `json:"channel_id"`
+	Mode      string `json:"mode"`
+	Reason    string `json:"reason"` // "user_stop" | "timeout" | "error"
+}
+
+// DownloadProgressEvent 下载进度事件数据
+type DownloadProgressEvent struct {
+	StreamID    string `json:"stream_id"`
+	DeviceID    string `json:"device_id"`
+	ChannelID   string `json:"channel_id"`
+	Progress    int    `json:"progress"`     // 下载进度百分比 (0-100)
+	CurrentTime string `json:"current_time"` // 当前下载时间点
+	EndTime     string `json:"end_time"`     // 结束时间
+}
+
+// ChannelUpdateEvent 通道状态更新事件数据
+type ChannelUpdateEvent struct {
+	DeviceID  string `json:"device_id"`
+	ChannelID string `json:"channel_id"`
+	Status    string `json:"status"` // "online" | "offline"
 }
 
 // EventService 事件发布服务
@@ -115,4 +155,63 @@ func (s *EventService) PublishAlarm(deviceID, priority, method, alarmTime, descr
 		AlarmDescription: description,
 	}
 	s.Publish(EventAlarm, data)
+}
+
+// PublishAlarmWithID 发布带ID的报警事件
+func (s *EventService) PublishAlarmWithID(id int, deviceID, priority, method, alarmTime, description string) {
+	data := AlarmEvent{
+		ID:               id,
+		DeviceID:         deviceID,
+		AlarmPriority:    priority,
+		AlarmMethod:      method,
+		AlarmTime:        alarmTime,
+		AlarmDescription: description,
+	}
+	s.Publish(EventAlarm, data)
+}
+
+// PublishPlaySessionStart 发布播放会话开始事件
+func (s *EventService) PublishPlaySessionStart(streamID, deviceID, channelID, mode string) {
+	data := PlaySessionStartEvent{
+		StreamID:  streamID,
+		DeviceID:  deviceID,
+		ChannelID: channelID,
+		Mode:      mode,
+	}
+	s.Publish(EventPlaySessionStart, data)
+}
+
+// PublishPlaySessionStop 发布播放会话停止事件
+func (s *EventService) PublishPlaySessionStop(streamID, deviceID, channelID, mode, reason string) {
+	data := PlaySessionStopEvent{
+		StreamID:  streamID,
+		DeviceID:  deviceID,
+		ChannelID: channelID,
+		Mode:      mode,
+		Reason:    reason,
+	}
+	s.Publish(EventPlaySessionStop, data)
+}
+
+// PublishDownloadProgress 发布下载进度事件
+func (s *EventService) PublishDownloadProgress(streamID, deviceID, channelID string, progress int, currentTime, endTime string) {
+	data := DownloadProgressEvent{
+		StreamID:    streamID,
+		DeviceID:    deviceID,
+		ChannelID:   channelID,
+		Progress:    progress,
+		CurrentTime: currentTime,
+		EndTime:     endTime,
+	}
+	s.Publish(EventDownloadProgress, data)
+}
+
+// PublishChannelUpdate 发布通道状态更新事件
+func (s *EventService) PublishChannelUpdate(deviceID, channelID, status string) {
+	data := ChannelUpdateEvent{
+		DeviceID:  deviceID,
+		ChannelID: channelID,
+		Status:    status,
+	}
+	s.Publish(EventChannelUpdate, data)
 }

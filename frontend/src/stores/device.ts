@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { ElNotification } from 'element-plus'
 import { deviceApi, channelApi } from '../api/device'
 import type { Device, DeviceQuery, DeviceStats, Channel, ChannelQuery, ChannelStats } from '../types/device'
-import { wsService, type WSEvent, type DeviceOnlineEvent, type DeviceStatusEvent, type AlarmEvent } from '../api/websocket'
+import { wsService, type WSEvent, type DeviceOnlineEvent, type DeviceStatusEvent, type AlarmEvent, type PlaySessionStartEvent, type PlaySessionStopEvent } from '../api/websocket'
 
 /** 设备状态管理 */
 export const useDeviceStore = defineStore('device', () => {
@@ -133,6 +134,13 @@ export const useDeviceStore = defineStore('device', () => {
     stats.value.offline--
     // 添加到事件列表
     addEvent(event)
+    // 显示通知
+    ElNotification({
+      title: '设备上线',
+      message: `设备 ${data.device_name || data.device_id} 已上线`,
+      type: 'success',
+      duration: 3000,
+    })
   }
 
   /** 处理设备离线事件 */
@@ -148,6 +156,13 @@ export const useDeviceStore = defineStore('device', () => {
     stats.value.offline++
     // 添加到事件列表
     addEvent(event)
+    // 显示通知
+    ElNotification({
+      title: '设备离线',
+      message: `设备 ${data.device_name || data.device_id} 已离线`,
+      type: 'warning',
+      duration: 3000,
+    })
   }
 
   /** 处理设备状态更新事件 */
@@ -165,6 +180,41 @@ export const useDeviceStore = defineStore('device', () => {
   function handleAlarm(event: WSEvent<AlarmEvent>) {
     // 添加到事件列表
     addEvent(event)
+    // 显示通知
+    const priorityText = event.data.alarm_priority === '1' ? '高' : event.data.alarm_priority === '2' ? '中' : '低'
+    ElNotification({
+      title: '报警通知',
+      message: `设备 ${event.data.device_id} ${priorityText}优先级报警: ${event.data.alarm_description}`,
+      type: 'error',
+      duration: 5000,
+    })
+  }
+
+  /** 处理播放会话开始事件 */
+  function handlePlaySessionStart(event: WSEvent<PlaySessionStartEvent>) {
+    // 添加到事件列表
+    addEvent(event)
+    // 显示通知
+    const modeText = event.data.mode === 'live' ? '实时预览' : '录像回放'
+    ElNotification({
+      title: '播放会话开始',
+      message: `${modeText} ${event.data.device_id}/${event.data.channel_id}`,
+      type: 'info',
+      duration: 2000,
+    })
+  }
+
+  /** 处理播放会话停止事件 */
+  function handlePlaySessionStop(event: WSEvent<PlaySessionStopEvent>) {
+    // 添加到事件列表
+    addEvent(event)
+    // 显示通知
+    ElNotification({
+      title: '播放会话停止',
+      message: `会话 ${event.data.stream_id} 已停止${event.data.reason ? `: ${event.data.reason}` : ''}`,
+      type: 'info',
+      duration: 2000,
+    })
   }
 
   /** 添加事件到列表（最多保留 50 条） */
@@ -175,30 +225,68 @@ export const useDeviceStore = defineStore('device', () => {
     }
   }
 
-  /** 连接 WebSocket */
+  // 订阅取消函数集合（用于防止重复订阅）
+  let unsubscribeFunctions: (() => void)[] = []
+
+  /** 连接 WebSocket（允许重新连接） */
   function connectWebSocket() {
+    // 如果已连接则跳过
+    if (wsConnected.value) {
+      return
+    }
+
+    // 强制重置重连计数，允许重新连接
+    wsService.resetReconnect()
+
+    // 先取消之前的订阅，防止重复订阅
+    unsubscribeFunctions.forEach(unsub => unsub())
+    unsubscribeFunctions = []
+
     wsService.connect()
 
     // 订阅连接状态
-    wsService.subscribeStatus((status) => {
-      wsConnected.value = status === 'connected'
-    })
+    unsubscribeFunctions.push(
+      wsService.subscribeStatus((status) => {
+        wsConnected.value = status === 'connected'
+      })
+    )
 
     // 订阅设备上线事件
-    wsService.subscribe('device_online', handleDeviceOnline)
+    unsubscribeFunctions.push(
+      wsService.subscribe('device_online', handleDeviceOnline)
+    )
 
     // 订阅设备离线事件
-    wsService.subscribe('device_offline', handleDeviceOffline)
+    unsubscribeFunctions.push(
+      wsService.subscribe('device_offline', handleDeviceOffline)
+    )
 
     // 订阅设备状态事件
-    wsService.subscribe('device_status', handleDeviceStatus)
+    unsubscribeFunctions.push(
+      wsService.subscribe('device_status', handleDeviceStatus)
+    )
 
     // 订阅报警事件
-    wsService.subscribe('alarm', handleAlarm)
+    unsubscribeFunctions.push(
+      wsService.subscribe('alarm', handleAlarm)
+    )
+
+    // 订阅播放会话开始事件
+    unsubscribeFunctions.push(
+      wsService.subscribe('play_session_start', handlePlaySessionStart)
+    )
+
+    // 订阅播放会话停止事件
+    unsubscribeFunctions.push(
+      wsService.subscribe('play_session_stop', handlePlaySessionStop)
+    )
   }
 
   /** 断开 WebSocket */
   function disconnectWebSocket() {
+    // 取消所有订阅
+    unsubscribeFunctions.forEach(unsub => unsub())
+    unsubscribeFunctions = []
     wsService.disconnect()
     wsConnected.value = false
   }

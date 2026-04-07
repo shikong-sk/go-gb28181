@@ -149,21 +149,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { VideoCamera, CircleCheck, CircleClose, Refresh } from '@element-plus/icons-vue'
-import { useChannelStore } from '@/stores/device'
+import { useChannelStore, useDeviceStore } from '@/stores/device'
+import { wsService } from '@/api/websocket'
 import type { Channel } from '@/types/device'
 
 const route = useRoute()
 const router = useRouter()
 const channelStore = useChannelStore()
+const deviceStore = useDeviceStore()
 
 const deviceIdFilter = ref<string>('')
 const statusFilter = ref<string>('')
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// WebSocket 订阅取消函数
+let unsubscribeWs: (() => void) | null = null
 
 // PTZ 类型名称
 const ptzTypeNames: Record<number, string> = {
@@ -241,5 +246,26 @@ watch(
 
 onMounted(() => {
   channelStore.fetchChannels()
+
+  // 连接 WebSocket 并订阅事件
+  deviceStore.connectWebSocket()
+
+  // 订阅通道状态变更事件，自动刷新列表
+  unsubscribeWs = wsService.subscribe('channel_status', () => {
+    channelStore.fetchChannels()
+    channelStore.fetchStats(deviceIdFilter.value || undefined)
+  })
+  wsService.subscribe('channel_update', () => {
+    channelStore.fetchChannels()
+    channelStore.fetchStats(deviceIdFilter.value || undefined)
+  })
+})
+
+onUnmounted(() => {
+  // 取消 WebSocket 订阅
+  if (unsubscribeWs) {
+    unsubscribeWs()
+    unsubscribeWs = null
+  }
 })
 </script>

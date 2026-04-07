@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -129,16 +130,15 @@ func (a *App) Init() error {
 	zlmediakit.SetupZLMediaKitService(zlmCfg)
 	a.zlmClient = zlmediakit.GetZLMediaKitService()
 
-	// 7. 初始化 SIP 服务
-	if a.config.SIP.Enabled {
-		a.sipServer = sip.NewSIPServer(a.config, a.deviceService, a.alarmService)
-	}
+	// 7. 初始化 SIP 服务（核心功能，始终启用）
+	a.sipServer = sip.NewSIPServer(a.config, a.deviceService, a.alarmService)
 
 	// 8. 初始化播放服务
 	// 使用 buildSIPLocalIP 获取有效的 SIP 本地 IP（避免 0.0.0.0）
 	localIP := buildSIPLocalIP(a.config)
 	if a.zlmClient != nil {
 		a.playService = service.NewPlayService(nil, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort, a.config.ZLMediaKit.RtpPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
+		a.playService.SetEventService(a.eventService)
 	}
 
 	log.Info().Msg("应用初始化完成")
@@ -152,6 +152,12 @@ func (a *App) Start() error {
 
 	if a.running {
 		return nil
+	}
+
+	// 0. 检查端口冲突（启动前检测）
+	if err := a.checkPortsConflict(); err != nil {
+		log.Error().Err(err).Msg("端口冲突检测失败")
+		return err
 	}
 
 	// 1. 初始化并启动 WebSocket 服务
@@ -183,7 +189,16 @@ func (a *App) Start() error {
 			localIP,
 			a.config.SIP.ListenPort,
 		)
+		a.catalogSubscriptionService = service.NewCatalogSubscriptionService(
+			sipClient,
+			a.deviceRepo,
+			a.channelRepo,
+			a.config.SIP.DeviceID,
+			localIP,
+			a.config.SIP.ListenPort,
+		)
 		a.playService = service.NewPlayService(sipClient, a.zlmClient, buildPlayConfig(a.config.ZLMediaKit.Url, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort, a.config.ZLMediaKit.RtpPort), a.deviceService, a.ssrcService, a.config.SIP.InviteTimeout)
+		a.playService.SetEventService(a.eventService)
 		a.downloadService = service.NewDownloadService(a.playService)
 		a.ptzService = service.NewPTZService(sipClient, a.deviceService)
 		a.recordService = service.NewRecordService(sipClient, a.deviceService, a.recordCacheRepo, a.config.SIP.DeviceID, localIP, a.config.SIP.ListenPort)
@@ -236,8 +251,21 @@ func (a *App) Start() error {
 			log.Warn().Err(err).Msg("获取 ZLM 配置失败，跳过 Hook 配置")
 		} else if len(currentConfig.Data) > 0 {
 			// 只修改 Hook 相关配置
+			// 确定 Hook URL 的 host：如果 HTTP.Host 是 0.0.0.0，使用 SIP 监听 IP
+			hookHost := a.config.HTTP.Host
+			if hookHost == "" || hookHost == "0.0.0.0" {
+				// 优先使用 SIP external_ip，其次使用 listen_ip
+				if a.config.SIP.ExternalIP != "" {
+					hookHost = a.config.SIP.ExternalIP
+				} else if a.config.SIP.ListenIP != "" && a.config.SIP.ListenIP != "0.0.0.0" {
+					hookHost = a.config.SIP.ListenIP
+				} else {
+					hookHost = "127.0.0.1"
+				}
+				log.Info().Str("hook_host", hookHost).Msg("HTTP.Host 为 0.0.0.0，使用 SIP IP 作为 Hook URL host")
+			}
 			hookBaseURL := fmt.Sprintf("http://%s:%d/index/api/hook",
-				a.config.HTTP.Host, a.config.HTTP.Port)
+				hookHost, a.config.HTTP.Port)
 
 			config := &currentConfig.Data[0]
 			config.HookEnable = "1"
@@ -626,4 +654,51 @@ func buildSIPLocalIP(cfg *config.Config) string {
 		return cfg.SIP.ListenIP
 	}
 	return "127.0.0.1"
+}
+
+// checkPortAvailable 检查端口是否可用
+// 返回 nil 表示端口可用，否则返回错误
+func checkPortAvailable(protocol, host string, port int) error {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	switch protocol {
+	case "tcp":
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("TCP 端口 %d 已被占用: %w", port, err)
+		}
+		listener.Close()
+	case "udp":
+		conn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return fmt.Errorf("UDP 端口 %d 已被占用: %w", port, err)
+		}
+		conn.Close()
+	}
+	return nil
+}
+
+// checkPortsConflict 检查所有服务端口是否冲突
+func (a *App) checkPortsConflict() error {
+	// 检查 SIP 端口 (UDP)
+	sipHost := a.config.SIP.ListenIP
+	if sipHost == "" || sipHost == "0.0.0.0" {
+		sipHost = "127.0.0.1"
+	}
+	if err := checkPortAvailable("udp", sipHost, a.config.SIP.ListenPort); err != nil {
+		return fmt.Errorf("SIP 端口冲突: %w", err)
+	}
+
+	// 检查 HTTP 端口 (TCP)
+	if a.config.HTTP.Enabled {
+		httpHost := a.config.HTTP.Host
+		if httpHost == "" || httpHost == "0.0.0.0" {
+			httpHost = "127.0.0.1"
+		}
+		if err := checkPortAvailable("tcp", httpHost, a.config.HTTP.Port); err != nil {
+			return fmt.Errorf("HTTP 端口冲突: %w", err)
+		}
+	}
+
+	return nil
 }
