@@ -175,7 +175,7 @@
       <div class="lg:tw-col-span-3 tw-bg-gray-900 tw-rounded-lg tw-shadow-lg tw-p-4 tw-border tw-border-gray-700">
         <div class="tw-aspect-video tw-bg-black tw-rounded tw-overflow-hidden tw-relative">
           <JessibucaPlayer
-            v-if="currentStream?.flv_url"
+            v-if="currentStream?.flv_url && streamReady"
             ref="playerRef"
             :url="currentStream.flv_url"
             :mode="currentStream.mode"
@@ -186,7 +186,13 @@
             @decoderchange="onDecoderChange"
             class="tw-w-full tw-h-full"
           />
-          <div v-else class="tw-w-full tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
+          <div v-if="playing && !streamReady" class="tw-w-full tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
+            <div class="tw-text-center">
+              <el-icon size="48" class="tw-mb-4 tw-animate-pulse"><VideoPlay /></el-icon>
+              <p>正在等待设备推流...</p>
+            </div>
+          </div>
+          <div v-else-if="!currentStream?.flv_url" class="tw-w-full tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
             <div class="tw-text-center">
               <el-icon size="48" class="tw-mb-4 tw-animate-pulse"><VideoPlay /></el-icon>
               <p>正在加载视频流...</p>
@@ -313,6 +319,7 @@ const playbackStartTime = ref('')
 const playbackEndTime = ref('')
 const playing = ref(false)
 const queryingRecords = ref(false)
+const streamReady = ref(false) // 录像回放模式下流是否就绪
 const currentStream = ref<PlayResponse | null>(null)
 const currentSession = ref<SessionResponse | null>(null)
 const sessions = ref<SessionResponse[]>([])
@@ -477,6 +484,50 @@ async function playRecord(record: RecordItem) {
   await startPlay()
 }
 
+// 录像回放模式下轮询流状态
+let streamStatusPollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopStreamStatusPolling() {
+  if (streamStatusPollTimer) {
+    clearInterval(streamStatusPollTimer)
+    streamStatusPollTimer = null
+  }
+}
+
+async function pollStreamStatus(streamId: string): Promise<boolean> {
+  try {
+    const res = await playApi.getStreamStatus(streamId)
+    return res.data?.ready === true
+  } catch {
+    return false
+  }
+}
+
+function startStreamStatusPolling(streamId: string, maxWaitMs: number) {
+  stopStreamStatusPolling()
+  const startTime = Date.now()
+  const pollInterval = 2000 // 每2秒轮询
+
+  streamStatusPollTimer = setInterval(async () => {
+    const elapsed = Date.now() - startTime
+    if (elapsed >= maxWaitMs) {
+      stopStreamStatusPolling()
+      ElMessage.error('等待流就绪超时')
+      playing.value = false
+      streamReady.value = false
+      currentStream.value = null
+      return
+    }
+
+    const ready = await pollStreamStatus(streamId)
+    if (ready) {
+      stopStreamStatusPolling()
+      streamReady.value = true
+      ElMessage.success('流已就绪，开始播放')
+    }
+  }, pollInterval)
+}
+
 async function startPlay() {
   if (!deviceId.value || !channelId.value) {
     ElMessage.warning('请输入设备ID和通道ID')
@@ -493,6 +544,8 @@ async function startPlay() {
 
   try {
     playing.value = true
+    streamReady.value = playMode.value !== 'playback' // 实时模式直接就绪
+
     const res = playMode.value === 'live'
       ? await playApi.start(deviceId.value, channelId.value)
       : await playApi.startPlayback({
@@ -506,10 +559,18 @@ async function startPlay() {
       currentStream.value = res.data
       console.log('播放响应:', res.data)
       await refreshSessions()
-      ElMessage.success('播放请求已发送')
+
+      // 录像回放模式：启动轮询，等待流就绪
+      if (playMode.value === 'playback') {
+        ElMessage.info('正在等待设备推流，请稍候...')
+        startStreamStatusPolling(res.data.stream_id, 180000) // 最多等待3分钟
+      } else {
+        ElMessage.success('播放请求已发送')
+      }
     }
   } catch (error) {
     playing.value = false
+    streamReady.value = false
     console.error('播放失败:', error)
     ElMessage.error('播放失败: ' + (error instanceof Error ? error.message : String(error)))
   }
@@ -540,6 +601,8 @@ async function stopPlay() {
     ElMessage.error('停止失败')
   } finally {
     playing.value = false
+    streamReady.value = false
+    stopStreamStatusPolling()
     currentStream.value = null
     currentSession.value = null
     await refreshSessions()
@@ -732,6 +795,8 @@ onMounted(() => {
       sessions.value = sessions.value.filter(s => s.stream_id !== stoppedStreamId)
       if (currentStream.value.stream_id === stoppedStreamId) {
         playing.value = false
+        streamReady.value = false
+        stopStreamStatusPolling()
         currentStream.value = null
         currentSession.value = null
       }
@@ -742,6 +807,8 @@ onMounted(() => {
 onUnmounted(() => {
   // 清理下载进度定时器
   stopDownloadProgressPolling()
+  // 清理流状态轮询定时器
+  stopStreamStatusPolling()
   // 取消 WebSocket 订阅
   if (unsubscribeWs) {
     unsubscribeWs()

@@ -99,5 +99,13 @@ func (h *HookHandler) OnPublish(c *gin.Context) {
 		Bool("auto_close", response.AutoClose).
 		Msg("[ZLM HOOK] 推流鉴权通过（包含demand参数）")
 
+	// 推流鉴权通过后更新流活跃时间，重置健康检查超时计时
+	// 鉴权通过表示设备正在推流，但不等于流已就绪
+	// 真正的流就绪由 on_stream_changed hook 或 MediaStatus(121) 通知
+	if h.playService != nil {
+		h.playService.UpdateStreamActiveTime(req.Stream)
+		log.Info().Str("stream", req.Stream).Msg("[ZLM HOOK] 推流鉴权通过，已更新流活跃时间")
+	}
+
 	c.JSON(200, response)
 }

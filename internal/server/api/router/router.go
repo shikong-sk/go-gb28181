@@ -99,6 +99,7 @@ func SetupRouterWithServices(catalogService *service.CatalogService, catalogSubs
 			play.POST("/stop", playHandler.Stop)
 			play.POST("/playback", playHandler.PlayBack)
 			play.GET("/sessions", playHandler.ListSessions)
+			play.GET("/stream_status/:stream_id", playHandler.GetStreamStatus)
 			play.GET("/media/:stream_id", playHandler.GetMediaInfo)
 		}
 

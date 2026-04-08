@@ -440,9 +440,14 @@ async function play(url: string) {
       conn = new HttpConnection(url)
     }
 
-    // 创建 demuxer，使用 'avcc' 格式避免崩溃
+    // 先建立连接
+    await conn.connect()
+    console.log('[Jessibuca] 连接已建立')
+
+    // 连接成功后创建 demuxer，使用 'avcc' 格式避免崩溃
     const mode = props.mode === 'live' ? DemuxMode.PUSH : DemuxMode.PULL
     demuxer = new FlvDemuxer(conn, mode, 'avcc')
+    console.log('[Jessibuca] Demuxer Created:', 'FlvDemuxer')
 
     // 监听视频编码配置变化
     demuxer.on(DemuxEvent.VIDEO_ENCODER_CONFIG_CHANGED, (vconfig: any) => {
@@ -503,8 +508,6 @@ async function play(url: string) {
         }
       }
     }
-
-    await conn.connect()
 
     // PULL模式处理
     if (mode === DemuxMode.PULL) {

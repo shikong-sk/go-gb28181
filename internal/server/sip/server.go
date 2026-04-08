@@ -499,28 +499,51 @@ func (s *SIPServer) handleMediaStatusMessage(req *sip.Request, body []byte) {
 		return
 	}
 
+	// 获取 Call-ID 用于关联会话
+	callId := req.CallID()
+	callIdStr := ""
+	if callId != nil {
+		callIdStr = callId.Value()
+	}
+
 	log.Info().
 		Str("device_id", notify.DeviceID).
 		Str("sn", notify.SN).
 		Int("notify_type", int(notify.NotifyType)).
 		Str("stream_id", notify.StreamId).
+		Str("call_id", callIdStr).
 		Msg("收到媒体状态通知")
 
-	// 处理录像结束通知 (NotifyType=121)
-	if notify.NotifyType == manscdp.MediaStatusNotifyTypeRecordEnd {
-		log.Info().Str("stream_id", notify.StreamId).Msg("录像结束通知")
+	if s.playService == nil {
+		log.Warn().Msg("播放服务未初始化，无法处理 MediaStatus")
+		return
+	}
 
-		// 清理播放会话
-		if s.playService != nil {
-			err := s.playService.OnMediaStatusReceived(notify.StreamId)
-			if err != nil {
-				log.Error().Err(err).Str("stream_id", notify.StreamId).Msg("处理 MediaStatus 失败")
-			} else {
-				log.Debug().Str("stream_id", notify.StreamId).Msg("录像结束通知已处理")
-			}
-		} else {
-			log.Warn().Str("stream_id", notify.StreamId).Msg("播放服务未初始化，无法处理录像结束通知")
+	// 根据通知类型处理
+	switch notify.NotifyType {
+	case manscdp.MediaStatusNotifyTypePlaybackStart:
+		// 121: 录像回放开始 - 取消流注册超时检测
+		log.Info().Str("device_id", notify.DeviceID).Str("call_id", callIdStr).Msg("录像回放开始通知")
+		// 通过 DeviceID 或 Call-ID 查找会话并取消超时
+		if notify.StreamId != "" {
+			s.playService.NotifyStreamRegistered(notify.StreamId)
+		} else if callIdStr != "" {
+			// 设备未发送 StreamId，通过 Call-ID 取消超时
+			s.playService.CancelRegistrationTimeoutByCallId(callIdStr)
 		}
+
+	case manscdp.MediaStatusNotifyTypePlaybackEnd:
+		// 122: 录像回放结束 - 清理会话
+		log.Info().Str("device_id", notify.DeviceID).Str("stream_id", notify.StreamId).Msg("录像回放结束通知")
+		if notify.StreamId != "" {
+			_ = s.playService.OnMediaStatusReceived(notify.StreamId)
+		} else if callIdStr != "" {
+			// 设备未发送 StreamId，通过 Call-ID 清理
+			_ = s.playService.OnMediaStatusReceivedByCallId(callIdStr)
+		}
+
+	default:
+		log.Warn().Int("notify_type", int(notify.NotifyType)).Msg("未知的 MediaStatus 通知类型")
 	}
 }
 

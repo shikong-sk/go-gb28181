@@ -326,6 +326,12 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 	// 启动流注册超时检测
 	go s.monitorStreamRegistration(streamId)
 
+	// 录像回放和下载模式：异步等待设备推流，不阻塞 HTTP 响应
+	// 前端需轮询流状态，确认就绪后再连接播放器
+	if mode == PlayModePlayback || mode == PlayModeDownload {
+		go s.waitForPlaybackStream(streamId)
+	}
+
 	// 统一记录会话已经进入待确认阶段。
 	// 这里不能把"返回播放地址"误判为 RTP 已经成功，
 	// 真正成功仍以后续的 on_publish / on_stream_changed / getMediaList 为准。
@@ -338,6 +344,33 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 
 	log.Info().Str("device_id", deviceId).Str("channel_id", channelId).Str("stream_id", streamId).Str("mode", string(mode)).Msg("开始播放")
 	return s.buildPlayResult(session), nil
+}
+
+// waitForPlaybackStream 异步等待录像回放流就绪
+// 设备收到 INVITE 后需要时间准备录像数据，等待 streamRegistered 信号后更新状态
+func (s *PlayService) waitForPlaybackStream(streamId string) {
+	s.mu.RLock()
+	session, exists := s.sessions[streamId]
+	s.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	if session.Mode != PlayModePlayback && session.Mode != PlayModeDownload {
+		return
+	}
+
+	waitTimeout := 180 * time.Second
+	log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Dur("wait_timeout", waitTimeout).Msg("录像回放/下载模式，异步等待设备推流...")
+
+	select {
+	case <-session.streamRegistered:
+		log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Msg("设备推流已就绪（异步）")
+	case <-time.After(waitTimeout):
+		log.Warn().Str("stream_id", streamId).Str("mode", string(session.Mode)).Dur("timeout", waitTimeout).Msg("等待设备推流超时（异步）")
+		_ = s.Stop(streamId)
+	}
 }
 
 // isStreamActive 检查 ZLM 流是否真实存在
@@ -579,7 +612,8 @@ func (s *PlayService) getZlmReaderCount(streamId string) int64 {
 }
 
 // monitorStreamRegistration 监控流注册超时
-// 如果 10 秒内未收到流注册通知，自动发送 BYE 清理会话
+// 实时视频: 10秒内未收到流注册通知，自动发送 BYE 清理会话
+// 录像回放: 30秒超时（设备准备时间较长）
 func (s *PlayService) monitorStreamRegistration(streamId string) {
 	s.mu.RLock()
 	session, exists := s.sessions[streamId]
@@ -589,11 +623,17 @@ func (s *PlayService) monitorStreamRegistration(streamId string) {
 		return
 	}
 
+	// 根据播放模式设置超时时间
+	timeout := 10 * time.Second
+	if session.Mode == PlayModePlayback || session.Mode == PlayModeDownload {
+		timeout = 180 * time.Second // 录像回放/下载需要更长时间准备
+	}
+
 	select {
 	case <-session.streamRegistered:
-		log.Info().Str("stream_id", streamId).Msg("流注册成功")
-	case <-time.After(10 * time.Second):
-		log.Warn().Str("stream_id", streamId).Msg("流注册超时，发送 BYE 清理会话")
+		log.Info().Str("stream_id", streamId).Str("mode", string(session.Mode)).Msg("流注册成功")
+	case <-time.After(timeout):
+		log.Warn().Str("stream_id", streamId).Str("mode", string(session.Mode)).Dur("timeout", timeout).Msg("流注册超时，发送 BYE 清理会话")
 		// 调用 Stop 清理会话，会发送 BYE、关闭 RTP Server、释放 SSRC
 		if err := s.Stop(streamId); err != nil {
 			log.Error().Err(err).Str("stream_id", streamId).Msg("清理超时会话失败")
@@ -869,7 +909,7 @@ func (s *PlayService) CheckStreamHealth(timeout time.Duration) {
 		// 流不存在，检查是否需要触发断流检测
 		// 如果会话刚开始（10秒内），可能是正常的推流流程，跳过
 		sessionAge := now.Sub(item.startTime)
-		if sessionAge < 10*time.Second {
+		if sessionAge <= 10*time.Second {
 			continue
 		}
 
@@ -880,7 +920,7 @@ func (s *PlayService) CheckStreamHealth(timeout time.Duration) {
 
 		// 流不存在超过3秒，触发断流检测流程（作为 webhook 的兜底机制）
 		inactiveDuration := now.Sub(item.lastActiveTime)
-		reconnectTimeout := 3 * time.Second
+		reconnectTimeout := 30 * time.Second
 		if inactiveDuration > reconnectTimeout {
 			log.Warn().
 				Str("stream_id", item.streamId).
@@ -1167,6 +1207,33 @@ func (s *PlayService) ListSessions() []*PlaySession {
 		result = append(result, session)
 	}
 	return result
+}
+
+// IsStreamActive 导出流活跃状态检查
+func (s *PlayService) IsStreamActive(streamId string) bool {
+	return s.isStreamActive(streamId)
+}
+
+// IsFlvStreamReady 检查 FLV/RTMP 流是否已生成（前端播放需要）
+func (s *PlayService) IsFlvStreamReady(streamId string) bool {
+	if s.zlm == nil {
+		return false
+	}
+
+	// 查询 ZLM 媒体列表，检查是否有 FLV/RTMP 流
+	mediaList, err := s.zlm.GetMediaList(s.config.AppName, streamId)
+	if err != nil || mediaList.Code != 0 {
+		return false
+	}
+
+	// 检查是否有 RTMP 或 FMP4 流（FLV 播放需要）
+	for _, item := range mediaList.Data {
+		if item.Schema == "rtmp" || item.Schema == "fmp4" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *PlayService) generateStreamId(deviceId, channelId string, mode PlayMode, rangeStart, rangeEnd *time.Time) string {
@@ -1815,6 +1882,47 @@ func (s *PlayService) OnMediaStatusReceived(streamId string) error {
 
 	log.Info().Str("device_id", session.DeviceId).Str("stream_id", streamId).Msg("录像结束，已清理会话")
 	return nil
+}
+
+// OnMediaStatusReceivedByCallId 通过 Call-ID 处理录像结束
+// 用于设备未发送 StreamId 的情况
+func (s *PlayService) OnMediaStatusReceivedByCallId(callId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for streamId, session := range s.sessions {
+		if session.CallID == callId {
+			// 关闭 RTP Server
+			_, _ = s.zlm.CloseRtpServer(streamId)
+			delete(s.sessions, streamId)
+			log.Info().Str("device_id", session.DeviceId).Str("stream_id", streamId).Str("call_id", callId).Msg("录像结束（通过Call-ID），已清理会话")
+			return nil
+		}
+	}
+
+	log.Warn().Str("call_id", callId).Msg("通过 Call-ID 未找到对应会话")
+	return nil
+}
+
+// CancelRegistrationTimeoutByCallId 通过 Call-ID 取消流注册超时检测
+// 设备发送 MediaStatus(121) 表示回放开始，应取消超时
+func (s *PlayService) CancelRegistrationTimeoutByCallId(callId string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for streamId, session := range s.sessions {
+		if session.CallID == callId && session.streamRegistered != nil {
+			select {
+			case session.streamRegistered <- true:
+				log.Info().Str("stream_id", streamId).Str("call_id", callId).Msg("收到回放开始通知，已取消流注册超时")
+			default:
+				log.Debug().Str("stream_id", streamId).Msg("流注册通知 channel 已满")
+			}
+			return
+		}
+	}
+
+	log.Debug().Str("call_id", callId).Msg("通过 Call-ID 未找到待注册的会话")
 }
 
 // ReconnectSession 手动触发会话重连（供 HTTP API 调用）

@@ -281,6 +281,72 @@ func (h *PlayHandler) ListSessions(c *gin.Context) {
 	})
 }
 
+// StreamStatusResponse 流状态响应
+type StreamStatusResponse struct {
+	StreamId     string `json:"stream_id"`
+	Ready        bool   `json:"ready"`         // 流是否已就绪（FLV 可播放）
+	StreamActive bool   `json:"stream_active"` // RTP 流是否存在
+	FlvReady     bool   `json:"flv_ready"`     // FLV/RTMP 流是否已生成
+	Mode         string `json:"mode"`
+	Status       string `json:"status"`
+}
+
+// GetStreamStatus 获取流就绪状态
+// @Summary 获取流就绪状态
+// @Tags 视频播放
+// @Produce json
+// @Param stream_id path string true "流 ID"
+// @Success 200 {object} Response{data=StreamStatusResponse}
+// @Router /api/play/stream_status/{stream_id} [get]
+func (h *PlayHandler) GetStreamStatus(c *gin.Context) {
+	streamId := c.Param("stream_id")
+	if streamId == "" {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "流 ID 不能为空",
+		})
+		return
+	}
+
+	if h.playService == nil {
+		c.JSON(http.StatusServiceUnavailable, Response{
+			Code:    http.StatusServiceUnavailable,
+			Message: "播放服务不可用",
+		})
+		return
+	}
+
+	session, exists := h.playService.GetSession(streamId)
+	if !exists {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    http.StatusNotFound,
+			Message: "会话不存在",
+		})
+		return
+	}
+
+	streamActive := h.playService.IsStreamActive(streamId)
+
+	// 检查 FLV/RTMP 流是否已生成（前端播放需要）
+	flvReady := h.playService.IsFlvStreamReady(streamId)
+
+	// 流就绪条件：会话状态正常 + FLV 流已生成
+	ready := session.Status == service.PlayStatusPlaying && flvReady
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: StreamStatusResponse{
+			StreamId:     streamId,
+			Ready:        ready,
+			StreamActive: streamActive,
+			FlvReady:     flvReady,
+			Mode:         string(session.Mode),
+			Status:       session.Status,
+		},
+	})
+}
+
 // GetMediaInfo 获取媒体信息
 // @Summary 获取流媒体信息
 // @Tags 视频播放

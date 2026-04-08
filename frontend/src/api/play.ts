@@ -38,6 +38,11 @@ export const playApi = {
     return get<MediaInfoResponse>(`${BASE_URL}/media/${streamId}`)
   },
 
+  /** 获取流就绪状态 */
+  getStreamStatus: (streamId: string) => {
+    return get<StreamStatusResponse>(`${BASE_URL}/stream_status/${streamId}`)
+  },
+
   /** 查询历史录像 */
   queryRecords: (params: RecordQueryParams) => {
     return get<RecordListResponse>(`${RECORD_BASE_URL}/list`, params as unknown as Record<string, unknown>)
@@ -98,6 +103,16 @@ export interface SessionResponse {
 export interface MediaInfoResponse {
   has_stream: boolean
   info?: unknown
+}
+
+/** 流状态 */
+export interface StreamStatusResponse {
+  stream_id: string
+  ready: boolean
+  stream_active: boolean
+  flv_ready: boolean
+  mode: PlayMode
+  status: string
 }
 
 /** 录像查询参数 */
