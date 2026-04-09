@@ -32,74 +32,67 @@
     </div>
 
     <!-- 方向控制面板 -->
-    <div class="tw-grid tw-grid-cols-3 tw-gap-2 tw-mb-4">
-      <!-- 第一行：空、上、空 -->
-      <div></div>
-      <el-button
-        :disabled="disabled"
-        @mousedown="startControl('Up')"
-        @mouseup="stopControl"
-        @mouseleave="stopControl"
-        class="tw-flex tw-items-center tw-justify-center"
-      >
-        <el-icon><ArrowUp /></el-icon>
-      </el-button>
-      <div></div>
+    <div class="tw-flex tw-flex-col tw-gap-2 tw-mb-4">
+      <!-- 第一行：上 -->
+      <div class="tw-flex tw-justify-center">
+        <el-button
+          :disabled="disabled"
+          @mousedown="startControl('Up')"
+          @mouseup="stopControl"
+          @mouseleave="stopControl"
+          class="direction-btn"
+        >
+          <el-icon><ArrowUp /></el-icon>
+        </el-button>
+      </div>
 
       <!-- 第二行：左、停止、右 -->
-      <el-button
-        :disabled="disabled"
-        @mousedown="startControl('Left')"
-        @mouseup="stopControl"
-        @mouseleave="stopControl"
-        class="tw-flex tw-items-center tw-justify-center"
-      >
-        <el-icon><ArrowLeft /></el-icon>
-      </el-button>
-      <el-button
-        type="danger"
-        :disabled="disabled"
-        @click="stopControl"
-        class="tw-flex tw-items-center tw-justify-center"
-      >
-        停止
-      </el-button>
-      <el-button
-        :disabled="disabled"
-        @mousedown="startControl('Right')"
-        @mouseup="stopControl"
-        @mouseleave="stopControl"
-        class="tw-flex tw-items-center tw-justify-center"
-      >
-        <el-icon><ArrowRight /></el-icon>
-      </el-button>
+      <div class="tw-flex tw-justify-center tw-gap-2">
+        <el-button
+          :disabled="disabled"
+          @mousedown="startControl('Left')"
+          @mouseup="stopControl"
+          @mouseleave="stopControl"
+          class="direction-btn"
+        >
+          <el-icon><ArrowLeft /></el-icon>
+        </el-button>
+        <el-button
+          type="danger"
+          :disabled="disabled"
+          @click="stopControl"
+          class="direction-btn"
+          style="min-width: 60px;"
+        >
+          停止
+        </el-button>
+        <el-button
+          :disabled="disabled"
+          @mousedown="startControl('Right')"
+          @mouseup="stopControl"
+          @mouseleave="stopControl"
+          class="direction-btn"
+        >
+          <el-icon><ArrowRight /></el-icon>
+        </el-button>
+      </div>
 
-      <!-- 第三行：空、下、空 -->
-      <div></div>
-      <el-button
-        :disabled="disabled"
-        @mousedown="startControl('Down')"
-        @mouseup="stopControl"
-        @mouseleave="stopControl"
-        class="tw-flex tw-items-center tw-justify-center"
-      >
-        <el-icon><ArrowDown /></el-icon>
-      </el-button>
-      <div></div>
+      <!-- 第三行：下 -->
+      <div class="tw-flex tw-justify-center">
+        <el-button
+          :disabled="disabled"
+          @mousedown="startControl('Down')"
+          @mouseup="stopControl"
+          @mouseleave="stopControl"
+          class="direction-btn"
+        >
+          <el-icon><ArrowDown /></el-icon>
+        </el-button>
+      </div>
     </div>
 
     <!-- 变焦控制 -->
     <div class="tw-flex tw-gap-2 tw-mb-4">
-      <el-button
-        :disabled="disabled"
-        @mousedown="startControl('ZoomIn')"
-        @mouseup="stopControl"
-        @mouseleave="stopControl"
-        class="tw-flex-1"
-      >
-        <el-icon class="tw-mr-1"><ZoomIn /></el-icon>
-        放大
-      </el-button>
       <el-button
         :disabled="disabled"
         @mousedown="startControl('ZoomOut')"
@@ -109,6 +102,16 @@
       >
         <el-icon class="tw-mr-1"><ZoomOut /></el-icon>
         缩小
+      </el-button>
+      <el-button
+        :disabled="disabled"
+        @mousedown="startControl('ZoomIn')"
+        @mouseup="stopControl"
+        @mouseleave="stopControl"
+        class="tw-flex-1"
+      >
+        <el-icon class="tw-mr-1"><ZoomIn /></el-icon>
+        放大
       </el-button>
     </div>
 
@@ -253,7 +256,7 @@ async function emergencyStop() {
   border-radius: 8px;
 }
 
-.el-button {
+.direction-btn {
   min-width: 40px;
 }
 </style>
