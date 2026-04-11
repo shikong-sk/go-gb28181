@@ -9,6 +9,22 @@
     <!-- 筛选栏 -->
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-4 tw-mb-6">
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
+        <el-form-item label="搜索">
+          <el-input
+            v-model="keywordFilter"
+            placeholder="输入设备ID或名称"
+            clearable
+            style="width: 200px"
+            @keyup.enter="handleSearch"
+            @clear="handleSearch"
+          >
+            <template #append>
+              <el-button @click="handleSearch">
+                <el-icon><Search /></el-icon>
+              </el-button>
+            </template>
+          </el-input>
+        </el-form-item>
         <el-form-item label="设备状态">
           <el-select
             v-model="statusFilter"
@@ -149,7 +165,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, CircleCheck, CircleClose, Refresh } from '@element-plus/icons-vue'
+import { Monitor, CircleCheck, CircleClose, Refresh, Search } from '@element-plus/icons-vue'
 import { useDeviceStore } from '@/stores/device'
 import { wsService } from '@/api/websocket'
 import type { Device } from '@/types/device'
@@ -158,6 +174,7 @@ const router = useRouter()
 const deviceStore = useDeviceStore()
 
 const statusFilter = ref<string>('')
+const keywordFilter = ref<string>('')
 const currentPage = ref(1)
 const pageSize = ref(20)
 
@@ -172,11 +189,18 @@ function formatTime(time: string) {
 
 /** 刷新列表 */
 async function handleRefresh() {
+  keywordFilter.value = ''
+  statusFilter.value = ''
   await Promise.all([
     deviceStore.fetchDevices(),
     deviceStore.fetchStats(),
   ])
   ElMessage.success('刷新成功')
+}
+
+/** 搜索设备 */
+function handleSearch() {
+  deviceStore.searchDevices(keywordFilter.value)
 }
 
 /** 筛选状态变化 */

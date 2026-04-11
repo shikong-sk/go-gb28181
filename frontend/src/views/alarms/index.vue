@@ -28,10 +28,10 @@
     <!-- 筛选栏 -->
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-4 tw-mb-6">
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
-        <el-form-item label="设备ID">
-          <DeviceSelector
+        <el-form-item label="报警源ID">
+          <AlarmSourceSelector
             v-model="query.device_id"
-            placeholder="输入搜索设备"
+            placeholder="输入搜索设备/通道"
             width="200px"
             @keyup.enter="handleSearch"
           />
@@ -83,7 +83,13 @@
     <div class="tw-bg-white tw-rounded-lg tw-shadow">
       <el-table v-loading="loading" :data="alarms" stripe style="width: 100%">
         <el-table-column prop="id" label="ID" width="80" align="center" />
-        <el-table-column prop="deviceId" label="设备ID" min-width="180" />
+        <el-table-column prop="deviceId" label="报警源ID" min-width="180">
+          <template #default="{ row }">
+            <el-tooltip content="报警源可以是设备或通道" placement="top">
+              <span class="tw-cursor-help">{{ row.deviceId }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="alarmPriority" label="级别" width="80" align="center">
           <template #default="{ row }">
             <el-tag :type="getPriorityType(row.alarmPriority)" size="small">
@@ -140,7 +146,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Search, Refresh } from '@element-plus/icons-vue'
 import { alarmApi, type Alarm, type AlarmConfig, type AlarmQuery } from '@/api/alarm'
-import DeviceSelector from '@/components/common/DeviceSelector.vue'
+import AlarmSourceSelector from '@/components/common/AlarmSourceSelector.vue'
 
 const loading = ref(false)
 const alarms = ref<Alarm[]>([])

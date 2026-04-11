@@ -9,11 +9,28 @@
     <!-- 筛选栏 -->
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-4 tw-mb-6">
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
+        <el-form-item label="搜索">
+          <el-input
+            v-model="keywordFilter"
+            placeholder="输入通道ID或名称"
+            clearable
+            style="width: 200px"
+            @keyup.enter="handleSearch"
+            @clear="handleSearch"
+          >
+            <template #append>
+              <el-button @click="handleSearch">
+                <el-icon><Search /></el-icon>
+              </el-button>
+            </template>
+          </el-input>
+        </el-form-item>
         <el-form-item label="设备ID">
           <DeviceSelector
             v-model="deviceIdFilter"
             placeholder="输入搜索设备"
             width="200px"
+            @change="handleFilterChange"
           />
         </el-form-item>
         <el-form-item label="通道状态">
@@ -151,7 +168,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { VideoCamera, CircleCheck, CircleClose, Refresh } from '@element-plus/icons-vue'
+import { VideoCamera, CircleCheck, CircleClose, Refresh, Search } from '@element-plus/icons-vue'
 import { useChannelStore, useDeviceStore } from '@/stores/device'
 import { wsService } from '@/api/websocket'
 import type { Channel } from '@/types/device'
@@ -164,6 +181,7 @@ const deviceStore = useDeviceStore()
 
 const deviceIdFilter = ref<string>('')
 const statusFilter = ref<string>('')
+const keywordFilter = ref<string>('')
 const currentPage = ref(1)
 const pageSize = ref(20)
 
@@ -185,11 +203,19 @@ function getPTZTypeName(type: number): string {
 
 /** 刷新列表 */
 async function handleRefresh() {
+  deviceIdFilter.value = ''
+  statusFilter.value = ''
+  keywordFilter.value = ''
   await Promise.all([
     channelStore.fetchChannels(),
-    channelStore.fetchStats(deviceIdFilter.value || undefined),
+    channelStore.fetchStats(),
   ])
   ElMessage.success('刷新成功')
+}
+
+/** 搜索通道 */
+function handleSearch() {
+  channelStore.searchChannels(keywordFilter.value)
 }
 
 /** 筛选状态变化 */

@@ -55,10 +55,26 @@
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-6">
       <div class="tw-flex tw-justify-between tw-items-center tw-mb-4">
         <h3 class="tw-text-lg tw-font-bold">下载任务列表</h3>
-        <el-button size="small" @click="refreshSessions" :loading="refreshing">
-          <el-icon class="tw-mr-1"><Refresh /></el-icon>
-          刷新
-        </el-button>
+        <div class="tw-flex tw-items-center tw-gap-2">
+          <el-input
+            v-model="searchKeyword"
+            placeholder="搜索设备ID或通道ID"
+            clearable
+            style="width: 200px"
+            @keyup.enter="filterSessions"
+            @clear="filterSessions"
+          >
+            <template #append>
+              <el-button @click="filterSessions">
+                <el-icon><Search /></el-icon>
+              </el-button>
+            </template>
+          </el-input>
+          <el-button size="small" @click="refreshSessions" :loading="refreshing">
+            <el-icon class="tw-mr-1"><Refresh /></el-icon>
+            刷新
+          </el-button>
+        </div>
       </div>
 
       <el-table :data="sessions" stripe v-loading="refreshing">
@@ -120,7 +136,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Refresh } from '@element-plus/icons-vue'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { downloadApi, type DownloadSessionResponse } from '@/api/download'
 import DeviceSelector from '@/components/common/DeviceSelector.vue'
 import ChannelSelector from '@/components/common/ChannelSelector.vue'
@@ -139,9 +155,24 @@ const downloadForm = ref({
 const starting = ref(false)
 const refreshing = ref(false)
 const sessions = ref<DownloadSessionResponse[]>([])
+const allSessions = ref<DownloadSessionResponse[]>([])  // 存储所有会话用于搜索
+const searchKeyword = ref('')
 
 // 进度轮询定时器
 let progressTimer: number | null = null
+
+// 过滤会话列表
+function filterSessions() {
+  if (!searchKeyword.value) {
+    sessions.value = allSessions.value
+  } else {
+    const keyword = searchKeyword.value.toLowerCase()
+    sessions.value = allSessions.value.filter(s =>
+      s.device_id.toLowerCase().includes(keyword) ||
+      s.channel_id.toLowerCase().includes(keyword)
+    )
+  }
+}
 
 // 状态映射
 function getStatusType(status: string): '' | 'success' | 'warning' | 'info' | 'danger' {
@@ -228,7 +259,8 @@ async function refreshSessions() {
   try {
     const response = await downloadApi.getSessions()
     if (response.data) {
-      sessions.value = response.data
+      allSessions.value = response.data
+      filterSessions()  // 应用搜索过滤
     }
   } catch (error: any) {
     ElMessage.error(error.message || '获取下载任务列表失败')

@@ -121,6 +121,13 @@ export const useDeviceStore = defineStore('device', () => {
     fetchDevices()
   }
 
+  /** 搜索设备（按关键词） */
+  function searchDevices(keyword: string) {
+    filter.value.keyword = keyword
+    pagination.value.page = 1
+    fetchDevices()
+  }
+
   /** 处理设备上线事件 */
   function handleDeviceOnline(event: WSEvent<DeviceOnlineEvent>) {
     const data = event.data
@@ -318,6 +325,7 @@ export const useDeviceStore = defineStore('device', () => {
     deleteDevice,
     updatePagination,
     updateFilter,
+    searchDevices,
     connectWebSocket,
     disconnectWebSocket,
     clearEvents,
@@ -401,6 +409,13 @@ export const useChannelStore = defineStore('channel', () => {
     fetchChannels()
   }
 
+  /** 搜索通道（按关键词） */
+  function searchChannels(keyword: string) {
+    filter.value.keyword = keyword
+    pagination.value.page = 1
+    fetchChannels()
+  }
+
   return {
     // 状态
     channels,
@@ -415,5 +430,6 @@ export const useChannelStore = defineStore('channel', () => {
     deleteChannel,
     updatePagination,
     updateFilter,
+    searchChannels,
   }
 })

@@ -7,6 +7,7 @@ export {}
 
 declare module 'vue' {
   export interface GlobalComponents {
+    AlarmSourceSelector: typeof import('./../components/common/AlarmSourceSelector.vue')['default']
     AppHeader: typeof import('./../components/layout/AppHeader.vue')['default']
     AppLayout: typeof import('./../components/layout/AppLayout.vue')['default']
     AppSidebar: typeof import('./../components/layout/AppSidebar.vue')['default']
@@ -46,6 +47,7 @@ declare module 'vue' {
     ElTable: typeof import('element-plus/es')['ElTable']
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     ElTag: typeof import('element-plus/es')['ElTag']
+    ElTooltip: typeof import('element-plus/es')['ElTooltip']
     JessibucaPlayer: typeof import('./../components/JessibucaPlayer.vue')['default']
     PTZControl: typeof import('./../components/PTZControl.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
