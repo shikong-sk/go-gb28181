@@ -27,6 +27,10 @@
         <el-icon><VideoPlay /></el-icon>
         <span>视频播放</span>
       </el-menu-item>
+      <el-menu-item index="/download">
+        <el-icon><Download /></el-icon>
+        <span>录像下载</span>
+      </el-menu-item>
       <el-menu-item index="/alarms">
         <el-icon><Bell /></el-icon>
         <span>报警记录</span>
@@ -36,5 +40,5 @@
 </template>
 
 <script setup lang="ts">
-import { HomeFilled, VideoCamera, List, VideoPlay, Bell } from '@element-plus/icons-vue'
+import { HomeFilled, VideoCamera, List, VideoPlay, Download, Bell } from '@element-plus/icons-vue'
 </script>

@@ -25,6 +25,7 @@ type ListChannelsRequest struct {
 	Page     int    `form:"page"`
 	PageSize int    `form:"page_size"`
 	DeviceID string `form:"device_id"`
+	Keyword  string `form:"keyword"` // 搜索关键词（支持 channel_id 和 name 模糊搜索）
 }
 
 // ListChannelsResponse 通道列表响应
@@ -54,6 +55,7 @@ func (h *ChannelHandler) List(c *gin.Context) {
 	if deviceID == "" {
 		deviceID = c.Query("deviceId") // 兼容 camelCase
 	}
+	keyword := c.Query("keyword")
 
 	// 默认值
 	if page == 0 {
@@ -72,8 +74,10 @@ func (h *ChannelHandler) List(c *gin.Context) {
 	var total int64
 	var err error
 
-	// 根据设备筛选
-	if deviceID != "" {
+	// 优先使用搜索关键词
+	if keyword != "" {
+		channels, total, err = h.repo.Search(keyword, deviceID, offset, pageSize)
+	} else if deviceID != "" {
 		channels, total, err = h.repo.ListByDeviceID(deviceID, offset, pageSize)
 	} else {
 		channels, total, err = h.repo.List(offset, pageSize)

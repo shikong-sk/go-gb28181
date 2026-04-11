@@ -90,6 +90,30 @@ func (r *ChannelRepository) ListByDeviceID(deviceID string, offset, limit int) (
 	return channels, total, nil
 }
 
+// Search 搜索通道（支持按 channel_id 和 name 模糊搜索，可按 device_id 过滤）
+func (r *ChannelRepository) Search(keyword string, deviceID string, offset, limit int) ([]model.Channel, int64, error) {
+	var channels []model.Channel
+	var total int64
+
+	query := r.db.Model(&model.Channel{})
+	if deviceID != "" {
+		query = query.Where("device_id = ?", deviceID)
+	}
+	if keyword != "" {
+		query = query.Where("channel_id LIKE ? OR name LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if err := query.Offset(offset).Limit(limit).Find(&channels).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return channels, total, nil
+}
+
 // List 获取所有通道列表
 func (r *ChannelRepository) List(offset, limit int) ([]model.Channel, int64, error) {
 	var channels []model.Channel

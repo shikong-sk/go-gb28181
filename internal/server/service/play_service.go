@@ -62,6 +62,7 @@ type PlaySession struct {
 	Mode           PlayMode   // 播放模式
 	RangeStart     *time.Time // 回放开始时间
 	RangeEnd       *time.Time // 回放结束时间
+	Speed          int        // 下载倍速（仅 Download 模式有效，支持 1/2/4）
 	TargetHost     string     // 目标设备 IP
 	TargetPort     int        // 目标设备端口
 	Via            string     // Via header value
@@ -133,7 +134,7 @@ func (s *PlayService) SetEventService(eventService *EventService) {
 
 // Play 开始实时播放
 func (s *PlayService) Play(deviceId, channelId string) (*PlayResult, error) {
-	return s.startPlay(deviceId, channelId, PlayModeLive, nil, nil)
+	return s.startPlay(deviceId, channelId, PlayModeLive, nil, nil, 0)
 }
 
 // PlayBack 开始历史录像回放
@@ -141,7 +142,7 @@ func (s *PlayService) PlayBack(deviceId, channelId string, startTime, endTime ti
 	if endTime.Before(startTime) {
 		return nil, fmt.Errorf("结束时间不能早于开始时间")
 	}
-	return s.startPlay(deviceId, channelId, PlayModePlayback, &startTime, &endTime)
+	return s.startPlay(deviceId, channelId, PlayModePlayback, &startTime, &endTime, 0)
 }
 
 // Download 开始录像下载（支持倍速）
@@ -153,10 +154,10 @@ func (s *PlayService) Download(deviceId, channelId string, startTime, endTime ti
 	if speed != 1 && speed != 2 && speed != 4 {
 		return nil, fmt.Errorf("下载倍速仅支持 1/2/4")
 	}
-	return s.startPlay(deviceId, channelId, PlayModeDownload, &startTime, &endTime)
+	return s.startPlay(deviceId, channelId, PlayModeDownload, &startTime, &endTime, speed)
 }
 
-func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, rangeStart, rangeEnd *time.Time) (*PlayResult, error) {
+func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, rangeStart, rangeEnd *time.Time, speed int) (*PlayResult, error) {
 	if s.client == nil {
 		return nil, fmt.Errorf("SIP 客户端未初始化")
 	}
@@ -300,6 +301,7 @@ func (s *PlayService) startPlay(deviceId, channelId string, mode PlayMode, range
 		Mode:             mode,
 		RangeStart:       rangeStart,
 		RangeEnd:         rangeEnd,
+		Speed:            speed, // 下载倍速（仅 Download 模式有效）
 		TargetHost:       deviceIP,
 		TargetPort:       devicePort,
 		ViewerCount:      1,                  // 初始观看者计数为1
@@ -1261,9 +1263,11 @@ func (s *PlayService) buildSDP(session *PlaySession) string {
 	// COMPAT_JAVA: o= 行使用 channelId 作为用户名（与 Java GB28181SDPBuilder 一致）
 	originUser := session.ChannelId
 
-	// 回放/下载模式需要 u= 行，实时播放不需要
-	if session.Mode == PlayModePlayback || session.Mode == PlayModeDownload {
-		// COMPAT_JAVA: rtpmap 顺序与 WVP 一致（96, 98, 97, 99），避免设备解析错误
+	// COMPAT_WVP: rtpmap 顺序必须与 WVP 完全一致（96 PS, 97 MPEG4, 98 H264, 99 H265）
+	// 这是设备兼容性的关键，错误的顺序会导致设备解析失败
+
+	// 下载模式：需要 u= 行、a=downloadspeed 和 f= 行
+	if session.Mode == PlayModeDownload {
 		return fmt.Sprintf(`v=0
 o=%s 0 0 IN IP4 %s
 s=%s
@@ -1273,15 +1277,35 @@ t=%d %d
 m=video %d RTP/AVP 96 97 98 99
 a=recvonly
 a=rtpmap:96 PS/90000
-a=rtpmap:98 H264/90000
 a=rtpmap:97 MPEG4/90000
+a=rtpmap:98 H264/90000
+a=rtpmap:99 H265/90000
+a=downloadspeed:%d
+y=%s
+f=
+`, originUser, s.config.ZLMHost, title, session.ChannelId, s.config.ZLMHost, start, end, session.RTPPort, session.Speed, session.SSRC)
+	}
+
+	// 回放模式：需要 u= 行和 f= 行
+	if session.Mode == PlayModePlayback {
+		return fmt.Sprintf(`v=0
+o=%s 0 0 IN IP4 %s
+s=%s
+u=%s:0
+c=IN IP4 %s
+t=%d %d
+m=video %d RTP/AVP 96 97 98 99
+a=recvonly
+a=rtpmap:96 PS/90000
+a=rtpmap:97 MPEG4/90000
+a=rtpmap:98 H264/90000
 a=rtpmap:99 H265/90000
 y=%s
+f=
 `, originUser, s.config.ZLMHost, title, session.ChannelId, s.config.ZLMHost, start, end, session.RTPPort, session.SSRC)
 	}
 
 	// 实时播放模式（无 u= 行）
-	// COMPAT_JAVA: rtpmap 顺序与 WVP 一致（96, 98, 97, 99），避免设备解析错误
 	// GB28181-2016: f= 行必须存在（可为空）
 	return fmt.Sprintf(`v=0
 o=%s 0 0 IN IP4 %s
@@ -1291,8 +1315,8 @@ t=%d %d
 m=video %d RTP/AVP 96 97 98 99
 a=recvonly
 a=rtpmap:96 PS/90000
-a=rtpmap:98 H264/90000
 a=rtpmap:97 MPEG4/90000
+a=rtpmap:98 H264/90000
 a=rtpmap:99 H265/90000
 y=%s
 f=
@@ -2014,6 +2038,7 @@ func (s *PlayService) startReconnectProcess(streamId, deviceId, channelId string
 	// 获取回放时间范围（用于重连回放流）
 	rangeStart := session.RangeStart
 	rangeEnd := session.RangeEnd
+	speed := session.Speed // 保存下载倍速（用于重连下载流）
 
 	// 更新重连状态
 	session.IsReconnecting = true
@@ -2027,6 +2052,7 @@ func (s *PlayService) startReconnectProcess(streamId, deviceId, channelId string
 		Str("channel_id", channelId).
 		Int("retry_count", session.RetryCount).
 		Str("mode", string(mode)).
+		Int("speed", speed).
 		Msg("开始自动重连")
 
 	// 清理旧会话的资源（发送 BYE、关闭 RTP、释放 SSRC）
@@ -2054,7 +2080,7 @@ func (s *PlayService) startReconnectProcess(streamId, deviceId, channelId string
 		}
 	case PlayModeDownload:
 		if rangeStart != nil && rangeEnd != nil {
-			_, err = s.Download(deviceId, channelId, *rangeStart, *rangeEnd, 1)
+			_, err = s.Download(deviceId, channelId, *rangeStart, *rangeEnd, speed)
 		} else {
 			err = fmt.Errorf("下载模式缺少时间范围参数")
 		}

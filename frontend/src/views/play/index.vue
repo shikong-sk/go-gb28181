@@ -26,10 +26,10 @@
 
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
         <el-form-item label="设备ID">
-          <el-input v-model="deviceId" placeholder="请输入设备ID" style="width: 220px" />
+          <DeviceSelector v-model="deviceId" placeholder="输入搜索设备" width="220px" @select="onDeviceSelect" />
         </el-form-item>
         <el-form-item label="通道ID">
-          <el-input v-model="channelId" placeholder="请输入通道ID" style="width: 220px" />
+          <ChannelSelector v-model="channelId" :device-id="deviceId" placeholder="输入搜索通道" width="220px" />
         </el-form-item>
         <template v-if="playMode === 'playback'">
           <el-form-item label="查询日期">
@@ -306,6 +306,8 @@ import {
 import { wsService } from '@/api/websocket'
 import PTZControl from '@/components/PTZControl.vue'
 import JessibucaPlayer, { type VideoDecoderType } from '@/components/JessibucaPlayer.vue'
+import DeviceSelector from '@/components/common/DeviceSelector.vue'
+import ChannelSelector from '@/components/common/ChannelSelector.vue'
 
 const route = useRoute()
 const playerRef = ref<any>(null)
@@ -314,6 +316,12 @@ const currentDecoder = ref<VideoDecoderType>('wasm')
 const playMode = ref<PlayMode>('live')
 const deviceId = ref('')
 const channelId = ref('')
+
+// 设备选择后清空通道
+function onDeviceSelect() {
+  channelId.value = ''
+}
+
 const queryDate = ref('')
 const playbackStartTime = ref('')
 const playbackEndTime = ref('')

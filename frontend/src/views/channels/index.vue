@@ -10,11 +10,10 @@
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-4 tw-mb-6">
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
         <el-form-item label="设备ID">
-          <el-input
+          <DeviceSelector
             v-model="deviceIdFilter"
-            placeholder="请输入设备ID"
-            clearable
-            style="width: 200px"
+            placeholder="输入搜索设备"
+            width="200px"
           />
         </el-form-item>
         <el-form-item label="通道状态">
@@ -156,6 +155,7 @@ import { VideoCamera, CircleCheck, CircleClose, Refresh } from '@element-plus/ic
 import { useChannelStore, useDeviceStore } from '@/stores/device'
 import { wsService } from '@/api/websocket'
 import type { Channel } from '@/types/device'
+import DeviceSelector from '@/components/common/DeviceSelector.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -503,3 +503,130 @@ func TestOnDeviceKeepalive_AutoCreatesUnknownDevice(t *testing.T) {
 	assert.Equal(t, 41883, device.Port)
 	assert.Equal(t, model.DeviceStatusOnline, device.Status)
 }
+
+// TestBuildSDP_Download 测试录像下载 SDP 格式
+// 验证下载模式 SDP 包含 a=downloadspeed 属性，且 rtpmap 顺序与 WVP 一致
+func TestBuildSDP_Download(t *testing.T) {
+	playService := &PlayService{
+		config: PlayConfig{
+			ZLMHost:     "10.10.10.200",
+			ZLMPort:     8080,
+			AppName:     "rtp",
+			SIPListenIP: "10.10.10.200",
+			SIPPort:     5060,
+		},
+	}
+
+	startTime := time.Date(2026, 4, 9, 23, 39, 58, 0, time.Local)
+	endTime := time.Date(2026, 4, 9, 23, 50, 0, 0, time.Local)
+
+	session := &PlaySession{
+		StreamId:   "34020000001320000001_34020000001310000001_1744215598_1744216200",
+		DeviceId:   "34020000001320000001",
+		ChannelId:  "34020000001310000001",
+		RTPPort:    61242,
+		SSRC:       "2501007246", // 下载 SSRC 首位为 2
+		Mode:       PlayModeDownload,
+		RangeStart: &startTime,
+		RangeEnd:   &endTime,
+		Speed:      4, // 4 倍速下载
+		StartTime:  time.Now(),
+	}
+
+	sdp := playService.buildSDP(session)
+
+	t.Log("=== 录像下载 SDP ===")
+	t.Log(sdp)
+	t.Log("=== SDP 结束 ===")
+
+	// 验证关键格式
+	if !strings.Contains(sdp, "s=Download") {
+		t.Error("下载模式 s= 应为 Download")
+	}
+
+	if !strings.Contains(sdp, "u=34020000001310000001:0") {
+		t.Error("下载模式应包含 u= 行（通道ID:0 格式）")
+	}
+
+	// 检查 a=downloadspeed 属性（关键：下载倍速）
+	if !strings.Contains(sdp, "a=downloadspeed:4") {
+		t.Error("下载模式应包含 a=downloadspeed:4 属性")
+	}
+
+	// 检查 f= 行（GB28181-2016 标准要求）
+	if !strings.Contains(sdp, "f=") {
+		t.Error("下载模式应包含 f= 行")
+	}
+
+	// 验证 rtpmap 顺序与 WVP 一致（96 PS, 97 MPEG4, 98 H264, 99 H265）
+	expectedRtpmapOrder := []string{
+		"a=rtpmap:96 PS/90000",
+		"a=rtpmap:97 MPEG4/90000",
+		"a=rtpmap:98 H264/90000",
+		"a=rtpmap:99 H265/90000",
+	}
+	for _, expected := range expectedRtpmapOrder {
+		if !strings.Contains(sdp, expected) {
+			t.Errorf("下载模式 SDP 应包含 %s", expected)
+		}
+	}
+
+	// 检查时间戳
+	expectedStart := startTime.Unix()
+	expectedEnd := endTime.Unix()
+	timeLine := fmt.Sprintf("t=%d %d", expectedStart, expectedEnd)
+	if !strings.Contains(sdp, timeLine) {
+		t.Errorf("时间行格式错误，期望包含 '%s'", timeLine)
+	}
+
+	// 检查 SSRC 首位为 2
+	if !strings.Contains(sdp, "y=2501007246") {
+		t.Error("下载模式 SSRC 首位应为 2")
+	}
+}
+
+// TestBuildSDP_DownloadSpeedValues 测试不同下载倍速
+func TestBuildSDP_DownloadSpeedValues(t *testing.T) {
+	playService := &PlayService{
+		config: PlayConfig{
+			ZLMHost:     "10.10.10.200",
+			ZLMPort:     8080,
+			AppName:     "rtp",
+			SIPListenIP: "10.10.10.200",
+			SIPPort:     5060,
+		},
+	}
+
+	startTime := time.Date(2026, 4, 9, 23, 0, 0, 0, time.Local)
+	endTime := time.Date(2026, 4, 9, 23, 30, 0, 0, time.Local)
+
+	testCases := []struct {
+		speed    int
+		expected string
+	}{
+		{1, "a=downloadspeed:1"},
+		{2, "a=downloadspeed:2"},
+		{4, "a=downloadspeed:4"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("Speed%d", tc.speed), func(t *testing.T) {
+			session := &PlaySession{
+				StreamId:   "test_stream",
+				DeviceId:   "34020000001320000001",
+				ChannelId:  "34020000001310000001",
+				RTPPort:    60000,
+				SSRC:       "2500000001",
+				Mode:       PlayModeDownload,
+				RangeStart: &startTime,
+				RangeEnd:   &endTime,
+				Speed:      tc.speed,
+			}
+
+			sdp := playService.buildSDP(session)
+			if !strings.Contains(sdp, tc.expected) {
+				t.Errorf("期望包含 '%s'，实际 SDP:\n%s", tc.expected, sdp)
+			}
+		})
+	}
+}

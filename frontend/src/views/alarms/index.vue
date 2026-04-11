@@ -29,11 +29,10 @@
     <div class="tw-bg-white tw-rounded-lg tw-shadow tw-p-4 tw-mb-6">
       <el-form :inline="true" class="tw-flex tw-flex-wrap tw-gap-4">
         <el-form-item label="设备ID">
-          <el-input
+          <DeviceSelector
             v-model="query.device_id"
-            placeholder="请输入设备ID"
-            clearable
-            style="width: 200px"
+            placeholder="输入搜索设备"
+            width="200px"
             @keyup.enter="handleSearch"
           />
         </el-form-item>
@@ -141,6 +140,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Search, Refresh } from '@element-plus/icons-vue'
 import { alarmApi, type Alarm, type AlarmConfig, type AlarmQuery } from '@/api/alarm'
+import DeviceSelector from '@/components/common/DeviceSelector.vue'
 
 const loading = ref(false)
 const alarms = ref<Alarm[]>([])

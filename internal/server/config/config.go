@@ -30,6 +30,9 @@ type Config struct {
 
 	// Redis 配置
 	Redis RedisConfig `mapstructure:"redis"`
+
+	// 下载配置
+	Download DownloadConfig `mapstructure:"download"`
 }
 
 // SIPConfig SIP 相关配置
@@ -84,6 +87,14 @@ type AlarmConfig struct {
 	RetentionDays int  `mapstructure:"retention_days"` // 保留天数 (0=永久保留)
 }
 
+// DownloadConfig 下载配置
+type DownloadConfig struct {
+	// UseStandardMode 是否使用标准下载模式
+	// true: 使用标准下载模式 (s=Download, SSRC前缀2)
+	// false: 使用回放模式+倍速 (s=Playback, SSRC前缀1，兼容性更好)
+	UseStandardMode bool `mapstructure:"use_standard_mode"`
+}
+
 // RedisConfig Redis 配置
 type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`     // Redis 地址 (host:port)
@@ -132,6 +143,9 @@ func DefaultConfig() *Config {
 			Addr:     "localhost:6379",
 			Password: "",
 			DB:       0,
+		},
+		Download: DownloadConfig{
+			UseStandardMode: false, // 默认使用回放模式+倍速，兼容性更好
 		},
 	}
 }
@@ -215,6 +229,8 @@ func setDefaults(v *viper.Viper, c *Config) {
 	v.SetDefault("redis.addr", c.Redis.Addr)
 	v.SetDefault("redis.password", c.Redis.Password)
 	v.SetDefault("redis.db", c.Redis.DB)
+
+	v.SetDefault("download.use_standard_mode", c.Download.UseStandardMode)
 }
 
 // generateDefaultConfig 生成默认配置文件
@@ -293,6 +309,13 @@ retention_days = 3          # 保留天数 (0=永久保留)
 addr = "localhost:6379"     # Redis 地址
 password = ""               # Redis 密码
 db = 0                      # Redis 数据库编号
+
+[download]
+# 下载配置
+# use_standard_mode: 是否使用标准下载模式
+# true  = 使用标准下载模式 (s=Download, SSRC前缀2)，符合GB28181标准
+# false = 使用回放模式+倍速 (s=Playback, SSRC前缀1)，兼容性更好，大部分设备支持
+use_standard_mode = false
 `
 
 	// 确保目录存在

@@ -35,6 +35,7 @@ export interface DeviceQuery {
   page?: number
   pageSize?: number
   status?: DeviceStatus
+  keyword?: string  // 搜索关键词（支持 deviceId 和 name 模糊搜索）
 }
 
 /** 设备列表响应 */
@@ -88,6 +89,7 @@ export interface ChannelQuery {
   pageSize?: number
   deviceId?: string
   status?: ChannelStatus
+  keyword?: string  // 搜索关键词（支持 channelId 和 name 模糊搜索）
 }
 
 /** 通道列表响应 */

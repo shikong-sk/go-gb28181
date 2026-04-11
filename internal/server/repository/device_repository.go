@@ -121,6 +121,27 @@ func (r *DeviceRepository) ListByStatus(status string, offset, limit int) ([]mod
 	return devices, total, nil
 }
 
+// Search 搜索设备（支持按 device_id 和 name 模糊搜索）
+func (r *DeviceRepository) Search(keyword string, offset, limit int) ([]model.Device, int64, error) {
+	var devices []model.Device
+	var total int64
+
+	query := r.db.Model(&model.Device{})
+	if keyword != "" {
+		query = query.Where("device_id LIKE ? OR name LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if err := query.Offset(offset).Limit(limit).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
+}
+
 // CountOnline 统计在线设备数量
 func (r *DeviceRepository) CountOnline() (int64, error) {
 	var count int64

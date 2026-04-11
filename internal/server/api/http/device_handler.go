@@ -32,6 +32,7 @@ type ListDevicesRequest struct {
 	Page     int    `form:"page"`
 	PageSize int    `form:"page_size"`
 	Status   string `form:"status"`
+	Keyword  string `form:"keyword"` // 搜索关键词（支持 device_id 和 name 模糊搜索）
 }
 
 // ListDevicesResponse 设备列表响应
@@ -49,6 +50,7 @@ func (h *DeviceHandler) List(c *gin.Context) {
 		pageSize, _ = strconv.Atoi(c.Query("pageSize")) // 兼容 camelCase
 	}
 	status := c.Query("status")
+	keyword := c.Query("keyword")
 
 	// 默认值
 	if page == 0 {
@@ -67,7 +69,10 @@ func (h *DeviceHandler) List(c *gin.Context) {
 	var total int64
 	var err error
 
-	if status != "" {
+	// 优先使用搜索关键词
+	if keyword != "" {
+		devices, total, err = h.repo.Search(keyword, offset, pageSize)
+	} else if status != "" {
 		devices, total, err = h.repo.ListByStatus(status, offset, pageSize)
 	} else {
 		devices, total, err = h.repo.List(offset, pageSize)

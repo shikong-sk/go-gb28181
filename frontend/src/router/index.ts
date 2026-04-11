@@ -33,6 +33,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '视频播放' },
   },
   {
+    path: '/download',
+    name: 'Download',
+    component: () => import('@/views/download/index.vue'),
+    meta: { title: '录像下载' },
+  },
+  {
     path: '/alarms',
     name: 'Alarms',
     component: () => import('@/views/alarms/index.vue'),
